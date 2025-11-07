@@ -1,49 +1,74 @@
 <?php
-// Allow requests from your frontend origin
-header("Access-Control-Allow-Origin: http://localhost:5173");
-
-// Allow specific methods
+// --- CORS Configuration ---
+$allowed_origin = "http://localhost:5173";
+header("Access-Control-Allow-Origin: $allowed_origin");
 header("Access-Control-Allow-Methods: GET, POST, OPTIONS");
-
-// Allow specific headers (this fixes your exact error)
 header("Access-Control-Allow-Headers: Content-Type, Authorization");
+header("Access-Control-Allow-Credentials: true"); // optional if using cookies or sessions
 
-// Handle preflight OPTIONS request
-if ($_SERVER['REQUEST_METHOD'] == 'OPTIONS') {
-  http_response_code(200);
-  exit();
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(200);
+    exit();
 }
 
-header("Content-Type: application/json");
+// --- Response Type ---
+header("Content-Type: application/json; charset=UTF-8");
 
-include 'db.php';
+// --- Include Database ---
+require_once 'db.php';
 
+// --- Get JSON Input ---
+$input = json_decode(file_get_contents("php://input"), true);
 
-// Get raw POST data
-$data = json_decode(file_get_contents("php://input"), true);
+// --- Validate JSON Input ---
+if (!$input) {
+    echo json_encode(["status" => "error", "message" => "Invalid JSON input."]);
+    exit;
+}
 
-$name = $data["name"];
-$email = $data["email"];
-$password = $data["password"];
+$name = trim($input["name"] ?? "");
+$email = trim($input["email"] ?? "");
+$password = $input["password"] ?? "";
 
-// Basic validation
+// --- Basic Validation ---
 if (empty($name) || empty($email) || empty($password)) {
-  echo json_encode(["status" => "error", "message" => "All fields are required."]);
-  exit;
+    echo json_encode(["status" => "error", "message" => "All fields are required."]);
+    exit;
 }
 
-// Hash password
+// Validate email format
+if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+    echo json_encode(["status" => "error", "message" => "Invalid email format."]);
+    exit;
+}
+
+// --- Check if user already exists ---
+$checkSql = "SELECT id FROM users WHERE email = ?";
+$checkStmt = $conn->prepare($checkSql);
+$checkStmt->bind_param("s", $email);
+$checkStmt->execute();
+$checkStmt->store_result();
+
+if ($checkStmt->num_rows > 0) {
+    echo json_encode(["status" => "error", "message" => "Email already registered."]);
+    $checkStmt->close();
+    $conn->close();
+    exit;
+}
+$checkStmt->close();
+
+// --- Hash Password ---
 $hashed_password = password_hash($password, PASSWORD_DEFAULT);
 
-// Insert into database
+// --- Insert User ---
 $sql = "INSERT INTO users (name, email, password) VALUES (?, ?, ?)";
 $stmt = $conn->prepare($sql);
 $stmt->bind_param("sss", $name, $email, $hashed_password);
 
 if ($stmt->execute()) {
-  echo json_encode(["status" => "success", "message" => "User registered successfully."]);
+    echo json_encode(["status" => "success", "message" => "User registered successfully."]);
 } else {
-  echo json_encode(["status" => "error", "message" => "Email already exists or database error."]);
+    echo json_encode(["status" => "error", "message" => "Database error: " . $stmt->error]);
 }
 
 $stmt->close();
