@@ -66,10 +66,20 @@ $stmt = $conn->prepare($sql);
 $stmt->bind_param("sss", $name, $email, $hashed_password);
 
 if ($stmt->execute()) {
-    echo json_encode(["status" => "success", "message" => "User registered successfully."]);
+    $user_id = $conn->insert_id;
+    echo json_encode([
+        "status" => "success",
+        "message" => "User registered successfully.",
+        "user" => [
+            "id" => $user_id,
+            "name" => $name,
+            "email" => $email
+        ]
+    ]);
 } else {
     echo json_encode(["status" => "error", "message" => "Database error: " . $stmt->error]);
 }
+
 
 $stmt->close();
 $conn->close();
