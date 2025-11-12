@@ -11,7 +11,9 @@ if (!$conn) {
     exit;
 }
 
-// ✅ Updated SQL to include all relevant columns
+$baseURL = "http://localhost/vayuhu_backend"; // adjust if folder name differs
+
+// ✅ Include profile_pic in SQL
 $sql = "SELECT 
             id, 
             name, 
@@ -19,6 +21,7 @@ $sql = "SELECT
             phone, 
             dob, 
             address, 
+            profile_pic,
             status, 
             comments, 
             details, 
@@ -28,15 +31,20 @@ $sql = "SELECT
         ORDER BY id DESC";
 
 $result = $conn->query($sql);
-
 $users = [];
 
 if ($result && $result->num_rows > 0) {
     while ($row = $result->fetch_assoc()) {
-        // Optional: Handle NULL values gracefully
+        // Handle NULLs
         foreach ($row as $key => $value) {
             $row[$key] = $value ?? "";
         }
+
+        // ✅ Convert relative image path → full URL
+        if (!empty($row['profile_pic'])) {
+            $row['profile_pic'] = $baseURL . '/' . $row['profile_pic'];
+        }
+
         $users[] = $row;
     }
 
