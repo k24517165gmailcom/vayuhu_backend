@@ -13,7 +13,7 @@ if (!$conn) {
 
 $baseURL = "http://localhost/vayuhu_backend"; // adjust if folder name differs
 
-// ✅ Include profile_pic in SQL
+// Remove 'comments' column from SQL
 $sql = "SELECT 
             id, 
             name, 
@@ -23,7 +23,6 @@ $sql = "SELECT
             address, 
             profile_pic,
             status, 
-            comments, 
             details, 
             company, 
             created_at
@@ -40,7 +39,7 @@ if ($result && $result->num_rows > 0) {
             $row[$key] = $value ?? "";
         }
 
-        // ✅ Convert relative image path → full URL
+        // Convert relative image path → full URL
         if (!empty($row['profile_pic'])) {
             $row['profile_pic'] = $baseURL . '/' . $row['profile_pic'];
         }
