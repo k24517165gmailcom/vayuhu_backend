@@ -1,106 +1,137 @@
 <?php
-// --- CORS Configuration ---
-$allowed_origin = "http://localhost:5173"; // Adjust if your frontend runs on another port
+// -------------------------
+// CORS
+// -------------------------
+$allowed_origin = "http://localhost:5173";
 header("Access-Control-Allow-Origin: $allowed_origin");
 header("Access-Control-Allow-Methods: POST, OPTIONS");
 header("Access-Control-Allow-Headers: Content-Type");
 header("Access-Control-Allow-Credentials: true");
 
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+if ($_SERVER["REQUEST_METHOD"] === "OPTIONS") {
     http_response_code(200);
     exit();
 }
 
 header("Content-Type: application/json; charset=UTF-8");
 
-// --- Include Database ---
+// -------------------------
+// Prevent PHP Warnings from breaking JSON
+// -------------------------
+ini_set("display_errors", 0);
+error_reporting(E_ALL);
+
+// -------------------------
+// Database
+// -------------------------
 require_once "db.php";
+if (!$conn) {
+    echo json_encode(["success" => false, "message" => "Database connection failed"]);
+    exit;
+}
 
-// --- Validate POST Method ---
+// -------------------------
+// Allow big uploads (fix JSON breaking issues)
+// -------------------------
+ini_set("upload_max_filesize", "5M");
+ini_set("post_max_size", "10M");
+
+// -------------------------
+// Validate POST
+// -------------------------
 if ($_SERVER["REQUEST_METHOD"] !== "POST") {
-    echo json_encode(["success" => false, "message" => "Invalid request method"]);
+    echo json_encode(["success" => false, "message" => "Invalid request"]);
     exit;
 }
 
-// --- Validate Required Fields ---
+// -------------------------
+// Required Fields
+// -------------------------
 $required = ["space_code", "space", "status"];
-foreach ($required as $field) {
-    if (empty($_POST[$field])) {
-        echo json_encode(["success" => false, "message" => ucfirst($field) . " is required."]);
+foreach ($required as $r) {
+    if (empty($_POST[$r])) {
+        echo json_encode(["success" => false, "message" => "$r is required"]);
         exit;
     }
 }
 
-// --- Sanitize Inputs ---
-$space_code = trim($_POST["space_code"]);
-$space = trim($_POST["space"]);
-$per_hour = $_POST["per_hour"] ?? null;
-$per_day = $_POST["per_day"] ?? null;
-$one_week = $_POST["one_week"] ?? null;
-$two_weeks = $_POST["two_weeks"] ?? null;
-$three_weeks = $_POST["three_weeks"] ?? null;
-$per_month = $_POST["per_month"] ?? null;
-$min_duration = $_POST["min_duration"] ?? null;
-$min_duration_desc = $_POST["min_duration_desc"] ?? null;
-$max_duration = $_POST["max_duration"] ?? null;
-$max_duration_desc = $_POST["max_duration_desc"] ?? null;
-$status = $_POST["status"] ?? "Active";
+// -------------------------
+// Sanitize Inputs
+// -------------------------
+function val($key) {
+    return isset($_POST[$key]) && $_POST[$key] !== "" ? trim($_POST[$key]) : null;
+}
 
-// --- Check for Duplicate Space Code ---
-$checkSql = "SELECT id FROM spaces WHERE space_code = ?";
-$checkStmt = $conn->prepare($checkSql);
-$checkStmt->bind_param("s", $space_code);
-$checkStmt->execute();
-$checkStmt->store_result();
+$space_code = val("space_code");
+$space = val("space");
+$per_hour = val("per_hour");
+$per_day = val("per_day");
+$one_week = val("one_week");
+$two_weeks = val("two_weeks");
+$three_weeks = val("three_weeks");
+$per_month = val("per_month");
+$min_duration = val("min_duration");
+$min_duration_desc = val("min_duration_desc");
+$max_duration = val("max_duration");
+$max_duration_desc = val("max_duration_desc");
+$status = val("status") ?? "Active";
 
-if ($checkStmt->num_rows > 0) {
-    echo json_encode(["success" => false, "message" => "Space with this code already exists."]);
-    $checkStmt->close();
-    $conn->close();
+// -------------------------
+// Duplicate Check
+// -------------------------
+$chk = $conn->prepare("SELECT id FROM spaces WHERE space_code = ?");
+$chk->bind_param("s", $space_code);
+$chk->execute();
+$chk->store_result();
+
+if ($chk->num_rows > 0) {
+    echo json_encode(["success" => false, "message" => "Space code already exists"]);
     exit;
 }
-$checkStmt->close();
+$chk->close();
 
-// --- Handle Image Upload ---
-$imagePath = "";
-if (isset($_FILES["image"]) && $_FILES["image"]["error"] === UPLOAD_ERR_OK) {
-    $uploadDir = "uploads/spaces/";
-    if (!is_dir($uploadDir)) {
-        mkdir($uploadDir, 0777, true);
-    }
-
-    $fileTmp = $_FILES["image"]["tmp_name"];
-    $fileName = uniqid("space_") . "_" . preg_replace("/[^a-zA-Z0-9._-]/", "_", $_FILES["image"]["name"]);
-    $filePath = $uploadDir . $fileName;
-
-    // Validate image type
-    $allowedTypes = ["image/jpeg", "image/png", "image/jpg", "image/webp"];
-    $mime = mime_content_type($fileTmp);
-    if (!in_array($mime, $allowedTypes)) {
-        echo json_encode(["success" => false, "message" => "Invalid image type. Only JPG, PNG, and WEBP allowed."]);
-        exit;
-    }
-
-    if (!move_uploaded_file($fileTmp, $filePath)) {
-        echo json_encode(["success" => false, "message" => "Failed to upload image."]);
-        exit;
-    }
-
-    $imagePath = $filePath;
-} else {
-    echo json_encode(["success" => false, "message" => "Image is required."]);
+// -------------------------
+// Image Upload
+// -------------------------
+if (!isset($_FILES["image"]) || $_FILES["image"]["error"] !== UPLOAD_ERR_OK) {
+    echo json_encode(["success" => false, "message" => "Image is required"]);
     exit;
 }
 
-// --- Insert into Database ---
+$uploadDir = "uploads/spaces/";
+if (!is_dir($uploadDir)) {
+    mkdir($uploadDir, 0777, true);
+}
+
+$fileTmp = $_FILES["image"]["tmp_name"];
+$fileName = uniqid("space_") . "_" . preg_replace("/[^a-zA-Z0-9._-]/", "_", $_FILES["image"]["name"]);
+$filePath = $uploadDir . $fileName;
+
+$allowed = ["image/jpeg", "image/png", "image/webp", "image/jpg"];
+$mime = mime_content_type($fileTmp);
+
+if (!in_array($mime, $allowed)) {
+    echo json_encode(["success" => false, "message" => "Invalid image format"]);
+    exit;
+}
+
+if (!move_uploaded_file($fileTmp, $filePath)) {
+    echo json_encode(["success" => false, "message" => "Image upload failed"]);
+    exit;
+}
+
+// -------------------------
+// Insert Query
+// -------------------------
 $sql = "INSERT INTO spaces 
-        (space_code, space, per_hour, per_day, one_week, two_weeks, three_weeks, per_month, 
+        (space_code, space, per_hour, per_day, one_week, two_weeks, three_weeks, per_month,
          min_duration, min_duration_desc, max_duration, max_duration_desc, image, status, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())";
 
 $stmt = $conn->prepare($sql);
+
 $stmt->bind_param(
-    "ssddddddddssss",
+    "ssdddddddsdsss",
     $space_code,
     $space,
     $per_hour,
@@ -113,14 +144,14 @@ $stmt->bind_param(
     $min_duration_desc,
     $max_duration,
     $max_duration_desc,
-    $imagePath,
+    $filePath,
     $status
 );
 
 if ($stmt->execute()) {
-    echo json_encode(["success" => true, "message" => "Space added successfully!"]);
+    echo json_encode(["success" => true, "message" => "Space added successfully"]);
 } else {
-    echo json_encode(["success" => false, "message" => "Database error: " . $stmt->error]);
+    echo json_encode(["success" => false, "message" => "DB Error: " . $stmt->error]);
 }
 
 $stmt->close();
