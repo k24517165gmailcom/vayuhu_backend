@@ -1,89 +1,139 @@
 <?php
-// ✅ Show PHP errors for debugging (remove on production)
 ini_set('display_errors', 1);
 error_reporting(E_ALL);
 
-// ✅ CORS headers (for React frontend)
+// ------------------
+// CORS HEADERS
+// ------------------
 header("Access-Control-Allow-Origin: http://localhost:5173");
 header("Access-Control-Allow-Methods: POST, OPTIONS");
-header("Access-Control-Allow-Headers: Content-Type");
+header("Access-Control-Allow-Credentials: true");
+header("Access-Control-Allow-Headers: Content-Type, Authorization, X-Requested-With");
 header("Content-Type: application/json; charset=UTF-8");
 
-// ✅ Handle preflight requests
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(200);
     exit();
 }
 
 try {
-    // ✅ Include DB connection
-    include 'db.php'; // ensure path is correct
+    include 'db.php';
 
-    // ✅ Parse JSON input
-    $data = json_decode(file_get_contents("php://input"), true);
-    if (!$data) {
-        throw new Exception("Invalid or missing JSON input.");
+    // ------------------
+    // Read JSON Input
+    // ------------------
+    $raw = file_get_contents("php://input");
+    $data = json_decode($raw, true);
+
+    if (json_last_error() !== JSON_ERROR_NONE) {
+        throw new Exception("Invalid JSON payload.");
     }
 
-    // ✅ Extract fields safely
-    $space_id          = $conn->real_escape_string($data['space_id'] ?? '');
-    $workspace_title   = $conn->real_escape_string($data['workspace_title'] ?? '');
-    $plan_type         = $conn->real_escape_string($data['plan_type'] ?? '');
-    $start_date        = $conn->real_escape_string($data['start_date'] ?? '');
-    $end_date          = $conn->real_escape_string($data['end_date'] ?? '');
-    $start_time        = $conn->real_escape_string($data['start_time'] ?? '');
-    $end_time          = $conn->real_escape_string($data['end_time'] ?? '');
-    $total_days        = (int)($data['total_days'] ?? 1);
-    $total_hours       = (int)($data['total_hours'] ?? 1);
-    $num_attendees     = (int)($data['num_attendees'] ?? 1);
-    $price_per_unit    = (float)($data['price_per_unit'] ?? 0);
-    $base_amount       = (float)($data['base_amount'] ?? 0);
-    $gst_amount        = (float)($data['gst_amount'] ?? 0);
-    $discount_amount   = (float)($data['discount_amount'] ?? 0);
-    $final_amount      = (float)($data['final_amount'] ?? 0);
-    $coupon_code       = $conn->real_escape_string($data['coupon_code'] ?? '');
-    $referral_source   = $conn->real_escape_string($data['referral_source'] ?? '');
-    $terms_accepted    = (int)($data['terms_accepted'] ?? 0);
+    // ------------------
+    // Extract Fields
+    // ------------------
+    $user_id         = (int)($data['user_id'] ?? 0);
+    $space_id        = $data['space_id'] ?? '';
+    $workspace_title = $data['workspace_title'] ?? '';
+    $plan_type       = $data['plan_type'] ?? '';
+    $start_date      = $data['start_date'] ?? '';
+    $end_date        = $data['end_date'] ?? '';
+    $start_time      = $data['start_time'] ?? '';
+    $end_time        = $data['end_time'] ?? '';
+    $total_days      = (int)($data['total_days'] ?? 1);
+    $total_hours     = (int)($data['total_hours'] ?? 1);
+    $num_attendees   = (int)($data['num_attendees'] ?? 1);
+    $price_per_unit  = (float)($data['price_per_unit'] ?? 0);
+    $base_amount     = (float)($data['base_amount'] ?? 0);
+    $gst_amount      = (float)($data['gst_amount'] ?? 0);
+    $discount_amount = (float)($data['discount_amount'] ?? 0);
+    $final_amount    = (float)($data['final_amount'] ?? 0);
+    $coupon_code     = $data['coupon_code'] ?? '';
+    $referral_source = $data['referral_source'] ?? '';
+    $terms_accepted  = (int)($data['terms_accepted'] ?? 0);
 
-    // ✅ Validate required fields
-    if (
-        empty($space_id) || empty($workspace_title) || empty($plan_type)
-        || empty($start_date) || empty($end_date)
-    ) {
-        throw new Exception("Missing required booking fields.");
+    // ------------------
+    // Basic Validation
+    // ------------------
+    if ($user_id <= 0) throw new Exception("Missing or invalid user_id.");
+
+    if (!$space_id || !$workspace_title || !$plan_type || !$start_date || !$end_date) {
+        throw new Exception("Missing required fields.");
     }
 
-    // ✅ Generate sequential booking_id (BKG-YYYYMMDD-001)
-    $today = date('Ymd');
-    $result = $conn->query("SELECT booking_id FROM workspace_bookings WHERE booking_id LIKE 'BKG-$today-%' ORDER BY id DESC LIMIT 1");
+    // Validate date format
+    if (!preg_match("/^\d{4}-\d{2}-\d{2}$/", $start_date)) {
+        throw new Exception("Invalid start_date format. Expected YYYY-MM-DD.");
+    }
+    if (!preg_match("/^\d{4}-\d{2}-\d{2}$/", $end_date)) {
+        throw new Exception("Invalid end_date format. Expected YYYY-MM-DD.");
+    }
 
+    // Validate time optional fields
+    if ($start_time && !preg_match("/^\d{2}:\d{2}$/", $start_time)) {
+        throw new Exception("Invalid start_time (expected HH:MM).");
+    }
+    if ($end_time && !preg_match("/^\d{2}:\d{2}$/", $end_time)) {
+        throw new Exception("Invalid end_time (expected HH:MM).");
+    }
+
+    // ------------------
+    // Validate user exists
+    // ------------------
+    $stmt = $conn->prepare("SELECT 1 FROM users WHERE id = ? LIMIT 1");
+    $stmt->bind_param("i", $user_id);
+    $stmt->execute();
+    $stmt->store_result();
+
+    if ($stmt->num_rows === 0) {
+        throw new Exception("Invalid user_id: user not found.");
+    }
+    $stmt->close();
+
+    // ------------------
+    // Generate Booking ID
+    // Format: BKG-YYYYMMDD-001
+    // ------------------
+    $today = date("Ymd");
+    $query = "
+        SELECT booking_id 
+        FROM workspace_bookings 
+        WHERE booking_id LIKE 'BKG-$today-%'
+        ORDER BY booking_id DESC 
+        LIMIT 1
+    ";
+
+    $result = $conn->query($query);
     if ($result && $row = $result->fetch_assoc()) {
-        $lastNumber = (int)substr($row['booking_id'], -3);
-        $nextNumber = str_pad($lastNumber + 1, 3, '0', STR_PAD_LEFT);
+        $lastNum = (int)substr($row['booking_id'], -3);
+        $nextNum = str_pad($lastNum + 1, 3, '0', STR_PAD_LEFT);
     } else {
-        $nextNumber = '001';
+        $nextNum = "001";
     }
 
-    $booking_id = "BKG-$today-$nextNumber";
+    $booking_id = "BKG-$today-$nextNum";
 
-    // ✅ Prepare SQL Insert
+    // ------------------
+    // INSERT BOOKING
+    // ------------------
     $stmt = $conn->prepare("
         INSERT INTO workspace_bookings (
-            booking_id, space_id, workspace_title, plan_type, start_date, end_date,
-            start_time, end_time, total_days, total_hours, num_attendees,
+            booking_id, user_id, space_id, workspace_title, plan_type,
+            start_date, end_date, start_time, end_time,
+            total_days, total_hours, num_attendees,
             price_per_unit, base_amount, gst_amount, discount_amount, final_amount,
             coupon_code, referral_source, terms_accepted
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ");
 
-    if (!$stmt) {
-        throw new Exception("Prepare failed: " . $conn->error);
-    }
+    if (!$stmt) throw new Exception("Prepare failed.");
 
-    // ✅ Bind Parameters (19 total)
+    // Correct bind_param types
     $stmt->bind_param(
-        "sissssssiiidddddssi",
+        "sissssssiiidddddssii",
         $booking_id,
+        $user_id,
         $space_id,
         $workspace_title,
         $plan_type,
@@ -104,21 +154,25 @@ try {
         $terms_accepted
     );
 
-    // ✅ Execute and respond
-    if ($stmt->execute()) {
-        echo json_encode([
-            "success" => true,
-            "message" => "Booking saved successfully.",
-            "booking_id" => $booking_id
-        ]);
-    } else {
-        throw new Exception("Database insert failed: " . $stmt->error);
+    if (!$stmt->execute()) {
+        error_log("INSERT ERROR: " . $stmt->error);
+        throw new Exception("Could not save booking. Please try again.");
     }
+
+    // ------------------
+    // Success response
+    // ------------------
+    echo json_encode([
+        "success" => true,
+        "message" => "Booking saved successfully.",
+        "booking_id" => $booking_id
+    ]);
 
     $stmt->close();
     $conn->close();
 
 } catch (Exception $e) {
+    http_response_code(400);
     echo json_encode([
         "success" => false,
         "message" => $e->getMessage()
