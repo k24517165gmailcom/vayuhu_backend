@@ -131,28 +131,29 @@ try {
 
     // Correct bind_param types
     $stmt->bind_param(
-        "sissssssiiidddddssii",
-        $booking_id,
-        $user_id,
-        $space_id,
-        $workspace_title,
-        $plan_type,
-        $start_date,
-        $end_date,
-        $start_time,
-        $end_time,
-        $total_days,
-        $total_hours,
-        $num_attendees,
-        $price_per_unit,
-        $base_amount,
-        $gst_amount,
-        $discount_amount,
-        $final_amount,
-        $coupon_code,
-        $referral_source,
-        $terms_accepted
-    );
+    "siissssssiidddddssii",
+    $booking_id,
+    $user_id,
+    $space_id,
+    $workspace_title,
+    $plan_type,
+    $start_date,
+    $end_date,
+    $start_time,
+    $end_time,
+    $total_days,
+    $total_hours,
+    $num_attendees,
+    $price_per_unit,
+    $base_amount,
+    $gst_amount,
+    $discount_amount,
+    $final_amount,
+    $coupon_code,
+    $referral_source,
+    $terms_accepted
+);
+
 
     if (!$stmt->execute()) {
         error_log("INSERT ERROR: " . $stmt->error);
