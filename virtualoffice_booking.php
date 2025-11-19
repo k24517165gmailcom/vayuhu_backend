@@ -1,65 +1,87 @@
 <?php
-// ✅ Show PHP errors for debugging
-ini_set('display_errors', 1);
-error_reporting(E_ALL);
-
-// ✅ Allow React Frontend (CORS)
+// -----------------------------
+// CORS + Headers
+// -----------------------------
 header("Access-Control-Allow-Origin: http://localhost:5173");
 header("Access-Control-Allow-Methods: POST, OPTIONS");
 header("Access-Control-Allow-Headers: Content-Type");
-header("Content-Type: application/json; charset=UTF-8");
+header("Content-Type: application/json");
 
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
-    http_response_code(200);
-    exit();
+// -----------------------------
+// DB Connection
+// -----------------------------
+include "db.php";
+
+if (!$conn) {
+    echo json_encode(["success" => false, "message" => "Database connection failed"]);
+    exit;
 }
 
-try {
-    include 'db.php'; // ensure correct path
+// -----------------------------
+// Parse Input
+// -----------------------------
+$data = json_decode(file_get_contents("php://input"), true);
 
-    // ✅ Parse JSON input
-    $data = json_decode(file_get_contents("php://input"), true);
-    if (!$data) {
-        throw new Exception("Invalid or missing JSON input.");
-    }
+$user_id      = $conn->real_escape_string($data['user_id'] ?? '');
+$start_date   = $conn->real_escape_string($data['start_date'] ?? '');
+$end_date     = $conn->real_escape_string($data['end_date'] ?? '');
+$price        = $conn->real_escape_string($data['price'] ?? '');
+$total_years  = $conn->real_escape_string($data['total_years'] ?? 1);
 
-    // ✅ Extract fields safely
-    $start_date  = $conn->real_escape_string($data['start_date'] ?? '');
-    $years       = (int)($data['years'] ?? 0);
-    $user_id     = (int)($data['user_id'] ?? 0); // optional, if available
+// -----------------------------
+// Validate Inputs
+// -----------------------------
+if (empty($user_id) || empty($start_date) || empty($end_date) || empty($price)) {
+    echo json_encode(["success" => false, "message" => "All fields are required."]);
+    exit;
+}
 
-    // ✅ Validation
-    if (empty($start_date) || $years <= 0) {
-        throw new Exception("Start date and years are required.");
-    }
+// -----------------------------
+// ✅ Prevent Duplicate Active Booking
+// -----------------------------
+$checkSql = "SELECT id FROM virtualoffice_bookings 
+             WHERE user_id = '$user_id' AND status = 'Active' 
+             AND end_date >= CURDATE() 
+             LIMIT 1";
+$checkResult = $conn->query($checkSql);
 
-    // ✅ Calculate end_date (start_date + years)
-    $end_date = date('Y-m-d', strtotime($start_date . ' + ' . $years . ' years'));
-
-    // ✅ Prepare SQL
-    $stmt = $conn->prepare("INSERT INTO virtualoffice_bookings (user_id, start_date, years, end_date) VALUES (?, ?, ?, ?)");
-    if (!$stmt) {
-        throw new Exception("Prepare failed: " . $conn->error);
-    }
-
-    $stmt->bind_param("isis", $user_id, $start_date, $years, $end_date);
-
-    if ($stmt->execute()) {
-        echo json_encode([
-            "success" => true,
-            "message" => "Virtual Office booking saved successfully."
-        ]);
-    } else {
-        throw new Exception("Database insert failed: " . $stmt->error);
-    }
-
-    $stmt->close();
-    $conn->close();
-
-} catch (Exception $e) {
+if ($checkResult && $checkResult->num_rows > 0) {
     echo json_encode([
         "success" => false,
-        "message" => $e->getMessage()
+        "message" => "You already have an active booking."
     ]);
+    $conn->close();
+    exit;
 }
+
+// -----------------------------
+// ✅ Fetch Active Plan
+// -----------------------------
+$priceQuery = "SELECT id FROM virtualoffice_prices WHERE status='Active' LIMIT 1";
+$priceResult = $conn->query($priceQuery);
+
+if ($priceResult && $priceResult->num_rows > 0) {
+    $priceRow = $priceResult->fetch_assoc();
+    $price_id = $priceRow['id'];
+} else {
+    echo json_encode(["success" => false, "message" => "No active plan found."]);
+    $conn->close();
+    exit;
+}
+
+// -----------------------------
+// ✅ Insert Booking Record
+// -----------------------------
+$sql = "INSERT INTO virtualoffice_bookings 
+        (user_id, price_id, start_date, end_date, total_years, total_amount, status, created_at)
+        VALUES 
+        ('$user_id', '$price_id', '$start_date', '$end_date', '$total_years', '$price', 'Active', NOW())";
+
+if ($conn->query($sql)) {
+    echo json_encode(["success" => true, "message" => "Booking created successfully."]);
+} else {
+    echo json_encode(["success" => false, "message" => "Database error: " . $conn->error]);
+}
+
+$conn->close();
 ?>
