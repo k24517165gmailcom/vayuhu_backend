@@ -16,16 +16,18 @@ if (!$conn) {
     exit;
 }
 
-// read JSON body
+// Read JSON body or POST form (for image)
+// ADDED: support FormData (image upload)
 $body = json_decode(file_get_contents('php://input'), true);
-$group = isset($body['group']) ? trim($body['group']) : '';
+$group = trim($_POST['group'] ?? $body['group'] ?? '');
+$defaults = json_decode($_POST['defaults'] ?? '{}', true);
 
 if (!$group) {
     echo json_encode(['success' => false, 'message' => 'Missing group parameter']);
     exit;
 }
 
-// mapping — keep this synced with frontend SPACE_GROUPS
+// Mapping - keep synced with frontend
 $groups = [
     "Workspace" => ['prefix' => 'WS', 'max' => 45],
     "Team Leads Cubicle" => ['prefix' => 'TLC', 'max' => 4],
@@ -43,26 +45,20 @@ if (!isset($groups[$group])) {
 $prefix = $groups[$group]['prefix'];
 $max = (int)$groups[$group]['max'];
 
-// fetch existing codes for this prefix
+// Fetch existing codes efficiently
 $stmt = $conn->prepare("SELECT space_code FROM spaces WHERE space_code LIKE CONCAT(?, '%')");
-$likePrefix = $prefix;
-$stmt->bind_param("s", $likePrefix);
+$stmt->bind_param("s", $prefix);
 $stmt->execute();
 $res = $stmt->get_result();
-$existing = [];
-while ($r = $res->fetch_assoc()) {
-    $existing[] = $r['space_code'];
-}
+$existing = array_column($res->fetch_all(MYSQLI_ASSOC), 'space_code');
 $stmt->close();
 
-// prepare list of all desired codes
+// Generate all desired codes
 $allDesired = [];
 for ($i = 1; $i <= $max; $i++) {
-    $code = $prefix . str_pad($i, 2, "0", STR_PAD_LEFT);
-    $allDesired[] = $code;
+    $allDesired[] = $prefix . str_pad($i, 2, "0", STR_PAD_LEFT);
 }
 
-// decide which to create
 $toCreate = array_values(array_diff($allDesired, $existing));
 $skipped = array_values(array_intersect($allDesired, $existing));
 
@@ -78,9 +74,20 @@ if (empty($toCreate)) {
     exit;
 }
 
-// Begin transaction
-$conn->begin_transaction();
+// ADDED: handle uploaded image
+$imagePath = '';
+if (isset($_FILES['image']) && $_FILES['image']['error'] === UPLOAD_ERR_OK) {
+    $tmp = $_FILES['image']['tmp_name'];
+    $ext = pathinfo($_FILES['image']['name'], PATHINFO_EXTENSION);
+    $imageName = $prefix . '_' . time() . '.' . $ext;
+    $uploadDir = __DIR__ . '/uploads/';
+    if (!is_dir($uploadDir)) mkdir($uploadDir, 0755, true);
+    move_uploaded_file($tmp, $uploadDir . $imageName);
+    $imagePath = 'uploads/' . $imageName;
+}
 
+// Insert with prepared statement and transaction
+$conn->begin_transaction();
 $created = [];
 $error = null;
 
@@ -94,45 +101,40 @@ if (!$stmtInsert) {
     exit;
 }
 
-// We'll insert minimal defaults: space (group name + number), numeric fields empty (NULL),
-// image empty string, status = Active
+// Insert minimal defaults
 foreach ($toCreate as $code) {
-    $spaceName = $group; // you can adjust; e.g., "Workspace" or "Workspace - WS01"
-    // Default values - use empty strings so DB will cast appropriately; change if you prefer NULL
-    $per_hour = ""; $per_day = ""; $one_week = ""; $two_weeks = ""; $three_weeks = ""; $per_month = "";
-    $min_duration = ""; $min_duration_desc = ""; $max_duration = ""; $max_duration_desc = "";
-    $image = ""; $status = "Active";
+    $spaceName = $group; // can be "Workspace" or "Workspace - WS01"
 
-    // bind as strings — MySQL will convert types if columns are numeric
-    if (!$stmtInsert->bind_param(
-        "ssssssssssssss",
+    // ADDED: use defaults from frontend
+    $values = [
         $code,
         $spaceName,
-        $per_hour,
-        $per_day,
-        $one_week,
-        $two_weeks,
-        $three_weeks,
-        $per_month,
-        $min_duration,
-        $min_duration_desc,
-        $max_duration,
-        $max_duration_desc,
-        $image,
-        $status
-    )) {
+        $defaults['per_hour'] ?? "",
+        $defaults['per_day'] ?? "",
+        $defaults['one_week'] ?? "",
+        $defaults['two_weeks'] ?? "",
+        $defaults['three_weeks'] ?? "",
+        $defaults['per_month'] ?? "",
+        $defaults['min_duration'] ?? "",
+        $defaults['min_duration_desc'] ?? "",
+        $defaults['max_duration'] ?? "",
+        $defaults['max_duration_desc'] ?? "",
+        $imagePath,
+        "Active"
+    ];
+
+    // Bind and execute
+    if (!$stmtInsert->bind_param(str_repeat("s", count($values)), ...$values)) {
         $error = "Bind failed: " . $stmtInsert->error;
         break;
     }
 
     if (!$stmtInsert->execute()) {
-        // if duplicate (race), skip and continue or abort depending on your policy
-        // here we abort and rollback to maintain atomicity
         $error = "Insert failed for {$code}: " . $stmtInsert->error;
         break;
-    } else {
-        $created[] = $code;
     }
+
+    $created[] = $code;
 }
 
 if ($error) {
