@@ -30,16 +30,16 @@ try {
     }
 
     // ------------------
-    // Extract Fields
+    // Extract and sanitize fields
     // ------------------
     $user_id         = (int)($data['user_id'] ?? 0);
-    $space_id        = $data['space_id'] ?? '';
-    $workspace_title = $data['workspace_title'] ?? '';
+    $space_id        = (int)($data['space_id'] ?? 0);
+    $workspace_title = trim($data['workspace_title'] ?? '');
     $plan_type       = strtolower(trim($data['plan_type'] ?? ''));
-    $start_date      = $data['start_date'] ?? '';
-    $end_date        = $data['end_date'] ?? '';
-    $start_time      = $data['start_time'] ?? '';
-    $end_time        = $data['end_time'] ?? '';
+    $start_date      = trim($data['start_date'] ?? '');
+    $end_date        = trim($data['end_date'] ?? '');
+    $start_time      = trim($data['start_time'] ?? null);
+    $end_time        = trim($data['end_time'] ?? null);
     $total_days      = (int)($data['total_days'] ?? 1);
     $total_hours     = (int)($data['total_hours'] ?? 1);
     $num_attendees   = (int)($data['num_attendees'] ?? 1);
@@ -48,20 +48,23 @@ try {
     $gst_amount      = (float)($data['gst_amount'] ?? 0);
     $discount_amount = (float)($data['discount_amount'] ?? 0);
     $final_amount    = (float)($data['final_amount'] ?? 0);
-    $coupon_code     = $data['coupon_code'] ?? '';
-    $referral_source = $data['referral_source'] ?? '';
+    $coupon_code     = trim($data['coupon_code'] ?? '');
+    $referral_source = trim($data['referral_source'] ?? '');
     $terms_accepted  = (int)($data['terms_accepted'] ?? 0);
 
     // ------------------
     // Basic Validation
     // ------------------
     if ($user_id <= 0) throw new Exception("Missing or invalid user_id.");
-
-    if (!$space_id || !$workspace_title || !$plan_type || !$start_date || !$end_date) {
+    if ($space_id <= 0) throw new Exception("Missing or invalid space_id.");
+    if (!$workspace_title || !$plan_type || !$start_date || !$end_date) {
         throw new Exception("Missing required fields.");
     }
 
-    // Validate date format
+    if (!in_array($plan_type, ['hourly', 'daily', 'monthly'])) {
+        throw new Exception("Invalid plan_type. Must be 'hourly', 'daily', or 'monthly'.");
+    }
+
     if (!preg_match("/^\d{4}-\d{2}-\d{2}$/", $start_date)) {
         throw new Exception("Invalid start_date format. Expected YYYY-MM-DD.");
     }
@@ -69,13 +72,16 @@ try {
         throw new Exception("Invalid end_date format. Expected YYYY-MM-DD.");
     }
 
-    // Validate optional time format
     if ($start_time && !preg_match("/^\d{2}:\d{2}$/", $start_time)) {
-        throw new Exception("Invalid start_time format (expected HH:MM).");
+        throw new Exception("Invalid start_time format. Expected HH:MM.");
     }
     if ($end_time && !preg_match("/^\d{2}:\d{2}$/", $end_time)) {
-        throw new Exception("Invalid end_time format (expected HH:MM).");
+        throw new Exception("Invalid end_time format. Expected HH:MM.");
     }
+
+    // Append :00 to times for MySQL TIME type if missing
+    if ($start_time && strlen($start_time) === 5) $start_time .= ':00';
+    if ($end_time && strlen($end_time) === 5) $end_time .= ':00';
 
     // ------------------
     // Validate user exists
@@ -88,45 +94,65 @@ try {
     $stmt->close();
 
     // ------------------
+    // Validate space exists
+    // ------------------
+    $stmt = $conn->prepare("SELECT 1 FROM spaces WHERE id = ? LIMIT 1");
+    $stmt->bind_param("i", $space_id);
+    $stmt->execute();
+    $stmt->store_result();
+    if ($stmt->num_rows === 0) throw new Exception("Invalid space_id: space not found.");
+    $stmt->close();
+
+    // ------------------
     // Check for overlapping bookings
     // ------------------
     if ($plan_type === 'hourly') {
-        // Check hourly overlap: same day, overlapping time slots
         $stmt = $conn->prepare("
             SELECT 1 
             FROM workspace_bookings 
             WHERE space_id = ?
               AND start_date = ?
-              AND (
-                  (start_time < ? AND end_time > ?)  -- overlapping time slots
-              )
+              AND start_time < ?
+              AND end_time > ?
             LIMIT 1
         ");
         $stmt->bind_param("isss", $space_id, $start_date, $end_time, $start_time);
-    } else {
-        // Check daily overlap: overlapping date ranges
+
+    } elseif ($plan_type === 'daily') {
         $stmt = $conn->prepare("
-            SELECT 1 
-            FROM workspace_bookings 
+            SELECT 1
+            FROM workspace_bookings
             WHERE space_id = ?
-              AND (
-                    (start_date <= ? AND end_date >= ?)
-                 )
+              AND start_date <= ?
+              AND end_date >= ?
             LIMIT 1
         ");
         $stmt->bind_param("iss", $space_id, $end_date, $start_date);
+
+    } elseif ($plan_type === 'monthly') {
+        // Monthly: check if any booking exists in the same month/year
+        $stmt = $conn->prepare("
+            SELECT 1
+            FROM workspace_bookings
+            WHERE space_id = ?
+              AND MONTH(start_date) = MONTH(?)
+              AND YEAR(start_date) = YEAR(?)
+            LIMIT 1
+        ");
+        $stmt->bind_param("iss", $space_id, $start_date, $start_date);
+
+        // Calculate total_days and total_hours automatically
+        $total_days = date("t", strtotime($start_date));
+        $total_hours = $total_days * 24;
     }
 
     $stmt->execute();
     $stmt->store_result();
-
-    if ($stmt->num_rows > 0) {
-        throw new Exception("This workspace is already booked for the selected date/time range.");
-    }
+    if ($stmt->num_rows > 0) throw new Exception("This workspace is already booked for the selected date/time range.");
     $stmt->close();
 
     // ------------------
-    // Generate Booking ID
+    // Generate booking ID
     // ------------------
     $today = date("Ymd");
     $query = "
@@ -146,7 +172,7 @@ try {
     $booking_id = "BKG-$today-$nextNum";
 
     // ------------------
-    // INSERT BOOKING
+    // Insert booking
     // ------------------
     $stmt = $conn->prepare("
         INSERT INTO workspace_bookings (
@@ -158,7 +184,7 @@ try {
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ");
-    if (!$stmt) throw new Exception("Prepare failed.");
+    if (!$stmt) throw new Exception("Prepare failed: " . $conn->error);
 
     $stmt->bind_param(
         "siissssssiidddddssii",
@@ -185,8 +211,7 @@ try {
     );
 
     if (!$stmt->execute()) {
-        error_log("INSERT ERROR: " . $stmt->error);
-        throw new Exception("Could not save booking. Please try again.");
+        throw new Exception("Could not save booking. " . $stmt->error);
     }
 
     echo json_encode([
