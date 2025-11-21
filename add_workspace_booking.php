@@ -79,7 +79,7 @@ try {
         throw new Exception("Invalid end_time format. Expected HH:MM.");
     }
 
-    // Append :00 to times for MySQL TIME type if missing
+    // Append :00 to times if needed
     if ($start_time && strlen($start_time) === 5) $start_time .= ':00';
     if ($end_time && strlen($end_time) === 5) $end_time .= ':00';
 
@@ -104,46 +104,82 @@ try {
     $stmt->close();
 
     // ------------------
-    // Check for overlapping bookings
+    // FIXED BOOKING OVERLAP LOGIC
     // ------------------
     if ($plan_type === 'hourly') {
+
+        // Hourly → check ONLY time overlap on SAME DAY
         $stmt = $conn->prepare("
-            SELECT 1 
-            FROM workspace_bookings 
+            SELECT 1 FROM workspace_bookings
             WHERE space_id = ?
               AND start_date = ?
-              AND start_time < ?
-              AND end_time > ?
+              AND (
+                    (start_time < ? AND end_time > ?)
+                  )
             LIMIT 1
         ");
         $stmt->bind_param("isss", $space_id, $start_date, $end_time, $start_time);
 
     } elseif ($plan_type === 'daily') {
+
+        // Daily → blocks ONLY bookings on SAME DAY
         $stmt = $conn->prepare("
-            SELECT 1
-            FROM workspace_bookings
+            SELECT 1 FROM workspace_bookings
             WHERE space_id = ?
-              AND start_date <= ?
-              AND end_date >= ?
+              AND (
+                    (plan_type = 'daily' AND start_date = ?)
+                    OR
+                    (plan_type = 'hourly' AND start_date = ?)
+                    OR
+                    (plan_type = 'monthly'
+                        AND ? BETWEEN start_date AND end_date
+                    )
+                  )
             LIMIT 1
         ");
-        $stmt->bind_param("iss", $space_id, $end_date, $start_date);
+        $stmt->bind_param("isss", $space_id, $start_date, $start_date, $start_date);
 
     } elseif ($plan_type === 'monthly') {
-        // Monthly: check if any booking exists in the same month/year
+
+        // Monthly → blocks only bookings INSIDE new date range
+        // daily/hourly BEFORE start date DO NOT BLOCK
         $stmt = $conn->prepare("
-            SELECT 1
-            FROM workspace_bookings
+            SELECT 1 FROM workspace_bookings
             WHERE space_id = ?
-              AND MONTH(start_date) = MONTH(?)
-              AND YEAR(start_date) = YEAR(?)
+              AND (
+                    /* MONTHLY overlapping */
+                    (plan_type = 'monthly'
+                        AND start_date <= ?
+                        AND end_date >= ?
+                    )
+
+                    OR
+
+                    /* DAILY inside monthly window */
+                    (plan_type = 'daily'
+                        AND start_date BETWEEN ? AND ?
+                    )
+
+                    OR
+
+                    /* HOURLY inside monthly window */
+                    (plan_type = 'hourly'
+                        AND start_date BETWEEN ? AND ?
+                    )
+                  )
             LIMIT 1
         ");
-        $stmt->bind_param("iss", $space_id, $start_date, $start_date);
 
-        // Calculate total_days and total_hours automatically
-        $total_days = date("t", strtotime($start_date));
-        $total_hours = $total_days * 24;
+        $stmt->bind_param(
+            "issssss",
+            $space_id,
+            $end_date,
+            $start_date,
+            $start_date,
+            $end_date,
+            $start_date,
+            $end_date
+        );
     }
 
     $stmt->execute();
