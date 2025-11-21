@@ -21,22 +21,25 @@ try {
 
     // Fetch all workspace bookings for admin view
     $sql = "
-        SELECT 
-            wb.booking_id AS id,
-            u.name AS name,
-            u.phone AS mobile_no,
-            wb.workspace_title AS space,
-            wb.plan_type AS pack,
-            wb.start_date AS date,
-            CONCAT(wb.start_time, ' - ', wb.end_time) AS timings,
-            wb.final_amount AS amount,
-            wb.discount_amount AS discount,
-            wb.final_amount AS final_total,
-            wb.created_at AS booked_on
-        FROM workspace_bookings wb
-        JOIN users u ON u.id = wb.user_id
-        ORDER BY wb.created_at DESC
-    ";
+    SELECT 
+        wb.booking_id AS id,
+        u.name AS name,
+        u.phone AS mobile_no,
+        wb.workspace_title AS space,
+        s.space_code AS space_code,
+        wb.plan_type AS pack,
+        wb.start_date AS date,
+        CONCAT(wb.start_time, ' - ', wb.end_time) AS timings,
+        wb.final_amount AS amount,
+        wb.discount_amount AS discount,
+        wb.final_amount AS final_total,
+        wb.created_at AS booked_on
+    FROM workspace_bookings wb
+    JOIN users u ON u.id = wb.user_id
+    JOIN spaces s ON s.id = wb.space_id
+    ORDER BY wb.created_at DESC
+";
+
 
     $result = $conn->query($sql);
 
