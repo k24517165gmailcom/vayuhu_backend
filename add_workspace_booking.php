@@ -104,83 +104,66 @@ try {
     $stmt->close();
 
     // ------------------
-    // FIXED BOOKING OVERLAP LOGIC
-    // ------------------
-    if ($plan_type === 'hourly') {
+// FIXED BOOKING OVERLAP LOGIC
+// ------------------
+if ($plan_type === 'hourly') {
+    // Hourly → cannot overlap other hourly AND cannot be inside daily/monthly booking
+    $stmt = $conn->prepare("
+        SELECT 1 FROM workspace_bookings
+        WHERE space_id = ?
+          AND (
+                (plan_type = 'hourly' AND start_date = ? AND start_time < ? AND end_time > ?)
+                OR
+                (plan_type = 'daily' AND start_date = ?)
+                OR
+                (plan_type = 'monthly' AND ? BETWEEN start_date AND end_date)
+              )
+        LIMIT 1
+    ");
+    $stmt->bind_param("isssss", $space_id, $start_date, $end_time, $start_time, $start_date, $start_date);
 
-        // Hourly → check ONLY time overlap on SAME DAY
-        $stmt = $conn->prepare("
-            SELECT 1 FROM workspace_bookings
-            WHERE space_id = ?
-              AND start_date = ?
-              AND (
-                    (start_time < ? AND end_time > ?)
-                  )
-            LIMIT 1
-        ");
-        $stmt->bind_param("isss", $space_id, $start_date, $end_time, $start_time);
+} elseif ($plan_type === 'daily') {
+    // Daily → cannot overlap daily/hourly on same day AND cannot fall inside monthly
+    $stmt = $conn->prepare("
+        SELECT 1 FROM workspace_bookings
+        WHERE space_id = ?
+          AND (
+                (plan_type = 'daily' AND start_date = ?)
+                OR
+                (plan_type = 'hourly' AND start_date = ?)
+                OR
+                (plan_type = 'monthly' AND ? BETWEEN start_date AND end_date)
+              )
+        LIMIT 1
+    ");
+    $stmt->bind_param("isss", $space_id, $start_date, $start_date, $start_date);
 
-    } elseif ($plan_type === 'daily') {
+} elseif ($plan_type === 'monthly') {
+    // Monthly → cannot overlap any bookings inside range
+    $stmt = $conn->prepare("
+        SELECT 1 FROM workspace_bookings
+        WHERE space_id = ?
+          AND (
+                (plan_type = 'monthly' AND start_date <= ? AND end_date >= ?)
+                OR
+                (plan_type = 'daily' AND start_date BETWEEN ? AND ?)
+                OR
+                (plan_type = 'hourly' AND start_date BETWEEN ? AND ?)
+              )
+        LIMIT 1
+    ");
+    $stmt->bind_param(
+        "issssss",
+        $space_id,
+        $end_date,
+        $start_date,
+        $start_date,
+        $end_date,
+        $start_date,
+        $end_date
+    );
+}
 
-        // Daily → blocks ONLY bookings on SAME DAY
-        $stmt = $conn->prepare("
-            SELECT 1 FROM workspace_bookings
-            WHERE space_id = ?
-              AND (
-                    (plan_type = 'daily' AND start_date = ?)
-                    OR
-                    (plan_type = 'hourly' AND start_date = ?)
-                    OR
-                    (plan_type = 'monthly'
-                        AND ? BETWEEN start_date AND end_date
-                    )
-                  )
-            LIMIT 1
-        ");
-        $stmt->bind_param("isss", $space_id, $start_date, $start_date, $start_date);
-
-    } elseif ($plan_type === 'monthly') {
-
-        // Monthly → blocks only bookings INSIDE new date range
-        // daily/hourly BEFORE start date DO NOT BLOCK
-        $stmt = $conn->prepare("
-            SELECT 1 FROM workspace_bookings
-            WHERE space_id = ?
-              AND (
-                    /* MONTHLY overlapping */
-                    (plan_type = 'monthly'
-                        AND start_date <= ?
-                        AND end_date >= ?
-                    )
-
-                    OR
-
-                    /* DAILY inside monthly window */
-                    (plan_type = 'daily'
-                        AND start_date BETWEEN ? AND ?
-                    )
-
-                    OR
-
-                    /* HOURLY inside monthly window */
-                    (plan_type = 'hourly'
-                        AND start_date BETWEEN ? AND ?
-                    )
-                  )
-            LIMIT 1
-        ");
-
-        $stmt->bind_param(
-            "issssss",
-            $space_id,
-            $end_date,
-            $start_date,
-            $start_date,
-            $end_date,
-            $start_date,
-            $end_date
-        );
-    }
 
     $stmt->execute();
     $stmt->store_result();

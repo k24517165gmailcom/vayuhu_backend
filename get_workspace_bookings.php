@@ -34,32 +34,35 @@ try {
 
     // Fetch bookings
     $stmt = $conn->prepare("
-        SELECT 
-            booking_id,
-            space_id,
-            workspace_title,
-            plan_type,
-            start_date,
-            end_date,
-            start_time,
-            end_time,
-            total_days,
-            total_hours,
-            num_attendees,
-            price_per_unit,
-            base_amount,
-            gst_amount,
-            discount_amount,
-            final_amount,
-            coupon_code,
-            referral_source,
-            terms_accepted,
-            status,
-            created_at
-        FROM workspace_bookings
-        WHERE user_id = ?
-        ORDER BY created_at DESC
-    ");
+    SELECT 
+        wb.booking_id,
+        wb.space_id,
+        s.space_code,
+        wb.workspace_title,
+        wb.plan_type,
+        wb.start_date,
+        wb.end_date,
+        wb.start_time,
+        wb.end_time,
+        wb.total_days,
+        wb.total_hours,
+        wb.num_attendees,
+        wb.price_per_unit,
+        wb.base_amount,
+        wb.gst_amount,
+        wb.discount_amount,
+        wb.final_amount,
+        wb.coupon_code,
+        wb.referral_source,
+        wb.terms_accepted,
+        wb.status,
+        wb.created_at
+    FROM workspace_bookings wb
+    JOIN spaces s ON wb.space_id = s.id
+    WHERE wb.user_id = ?
+    ORDER BY wb.created_at DESC
+");
+
 
     if (!$stmt) {
         throw new Exception("Prepare failed.");
