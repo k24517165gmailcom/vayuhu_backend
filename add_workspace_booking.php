@@ -72,12 +72,37 @@ try {
         throw new Exception("Invalid end_date format. Expected YYYY-MM-DD.");
     }
 
+    // ------------------
+// Block Sundays (Improved Logic)
+// ------------------
+$start_ts = strtotime($start_date);
+$end_ts   = strtotime($end_date);
+
+// Hourly & Daily → Block if start or end date is Sunday
+if ($plan_type === 'hourly' || $plan_type === 'daily') {
+    if (date('w', $start_ts) == 0 || date('w', $end_ts) == 0) {
+        throw new Exception("Bookings cannot be made on Sundays.");
+    }
+}
+
+if ($plan_type === 'monthly') {
+    if (date('w', $start_ts) == 0) {
+        throw new Exception("Monthly bookings cannot start on Sundays.");
+    }
+}
+
+
+
+    
+
+
     if ($start_time && !preg_match("/^\d{2}:\d{2}$/", $start_time)) {
         throw new Exception("Invalid start_time format. Expected HH:MM.");
     }
     if ($end_time && !preg_match("/^\d{2}:\d{2}$/", $end_time)) {
         throw new Exception("Invalid end_time format. Expected HH:MM.");
     }
+
 
     // Append :00 to times if needed
     if ($start_time && strlen($start_time) === 5) $start_time .= ':00';
