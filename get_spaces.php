@@ -40,11 +40,12 @@ $spaces = [];
 if ($result && $result->num_rows > 0) {
     while ($row = $result->fetch_assoc()) {
 
+        // Ensure null values are replaced with empty strings
         foreach ($row as $k => $v) {
             $row[$k] = $v ?? "";
         }
 
-        // Full image path
+        // Construct full image path
         $row["image_url"] = !empty($row["image"])
             ? $baseURL . "/" . ltrim($row["image"], "/")
             : "";
@@ -52,47 +53,90 @@ if ($result && $result->num_rows > 0) {
         $spaceId = (int)$row["id"];
 
         // --------------------------------------
-        // ✅ CHECK IF THIS SPACE IS BOOKED NOW OR FUTURE
-        // --------------------------------------
-        // Same booking table you used in add_workspace_booking.php
-        // If any record overlaps with today or later, we mark unavailable
-        $checkSql = "
-            SELECT 
-                start_date, 
-                end_date, 
-                plan_type 
-            FROM workspace_bookings 
-            WHERE space_id = $spaceId
-              AND status IN ('Confirmed', 'Pending')
-              AND (
-                    (plan_type = 'hourly'  AND start_date >= '$today')
-                 OR (plan_type = 'daily'   AND start_date >= '$today')
-                 OR (plan_type = 'monthly' AND end_date >= '$today')
-                  )
-            ORDER BY start_date ASC
-            LIMIT 1
-        ";
+// ✅ CHECK IF THIS SPACE IS BOOKED NOW OR FUTURE (hourly time-sensitive)
+// --------------------------------------
+$checkSql = "
+    SELECT 
+        start_date, 
+        end_date, 
+        start_time,
+        end_time,
+        plan_type 
+    FROM workspace_bookings 
+    WHERE space_id = ? 
+      AND status IN ('Confirmed', 'Pending')
+      AND (
+            (plan_type = 'hourly'  AND start_date = ?)
+         OR (plan_type = 'daily'   AND start_date >= ?)
+         OR (plan_type = 'monthly' AND end_date >= ?)
+          )
+    ORDER BY start_date ASC
+    LIMIT 1
+";
 
-        $bookedRow = null;
-        $isAvailable = true;
-        $res2 = $conn->query($checkSql);
-        if ($res2 && $res2->num_rows > 0) {
-            $bookedRow = $res2->fetch_assoc();
+$stmt = $conn->prepare($checkSql);
+if ($stmt) {
+    $stmt->bind_param("isss", $spaceId, $today, $today, $today);
+    $stmt->execute();
+    $res2 = $stmt->get_result();
+} else {
+    $res2 = false;
+}
+
+$bookedRow = null;
+$isAvailable = true;
+
+if ($res2 && $res2->num_rows > 0) {
+    $bookedRow = $res2->fetch_assoc();
+
+    // ✅ If hourly booking, check current time
+    if ($bookedRow["plan_type"] === "hourly") {
+        $now = new DateTime("now");
+        $bookingDate = new DateTime($bookedRow["start_date"]);
+        $startTime = DateTime::createFromFormat("H:i", $bookedRow["start_time"]);
+        $endTime   = DateTime::createFromFormat("H:i", $bookedRow["end_time"]);
+
+        if ($bookingDate->format("Y-m-d") === $now->format("Y-m-d")) {
+            // Merge date + time to full DateTime objects
+            $bookingStart = new DateTime($bookedRow["start_date"] . " " . $bookedRow["start_time"]);
+            $bookingEnd   = new DateTime($bookedRow["start_date"] . " " . $bookedRow["end_time"]);
+
+            if ($now >= $bookingStart && $now <= $bookingEnd) {
+                // Still within booked time → mark unavailable
+                $isAvailable = false;
+            }
+        } elseif ($bookingDate > $now) {
+            // Future hourly booking → still block it
             $isAvailable = false;
         }
+    } else {
+        // Daily or Monthly → block as before
+        $isAvailable = true; // default
+        $endDate = new DateTime($bookedRow["end_date"]);
+        if ($endDate >= new DateTime($today)) {
+            $isAvailable = false;
+        }
+    }
+}
 
         // --------------------------------------
-        // Mark is_available and attach details
+        // Mark is_available and attach reason
         // --------------------------------------
         if ($row["status"] !== "Active") {
             $row["is_available"] = false;
             $row["availability_reason"] = "Space inactive";
         } elseif (!$isAvailable) {
+            $endDateText = isset($bookedRow["end_date"]) ? $bookedRow["end_date"] : "Unknown date";
             $row["is_available"] = false;
-            $row["availability_reason"] = "Booked until " . $bookedRow["end_date"];
+            $row["availability_reason"] = "Booked until " . $endDateText;
         } else {
             $row["is_available"] = true;
             $row["availability_reason"] = "Available for booking";
+        }
+
+        // Close prepared statement (good habit)
+        if (isset($stmt)) {
+            $stmt->close();
         }
 
         $spaces[] = $row;
@@ -106,5 +150,6 @@ if ($result && $result->num_rows > 0) {
     echo json_encode(["success" => false, "message" => "No spaces found"]);
 }
 
+// Close DB connection
 $conn->close();
 ?>

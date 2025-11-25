@@ -73,29 +73,23 @@ try {
     }
 
     // ------------------
-// Block Sundays (Improved Logic)
-// ------------------
-$start_ts = strtotime($start_date);
-$end_ts   = strtotime($end_date);
+    // Block Sundays
+    // ------------------
+    $start_ts = strtotime($start_date);
+    $end_ts   = strtotime($end_date);
 
-// Hourly & Daily → Block if start or end date is Sunday
-if ($plan_type === 'hourly' || $plan_type === 'daily') {
-    if (date('w', $start_ts) == 0 || date('w', $end_ts) == 0) {
-        throw new Exception("Bookings cannot be made on Sundays.");
+    if ($plan_type === 'hourly' || $plan_type === 'daily') {
+        if (date('w', $start_ts) == 0 || date('w', $end_ts) == 0) {
+            throw new Exception("Bookings cannot be made on Sundays.");
+        }
     }
-}
-
-if ($plan_type === 'monthly') {
-    if (date('w', $start_ts) == 0) {
+    if ($plan_type === 'monthly' && date('w', $start_ts) == 0) {
         throw new Exception("Monthly bookings cannot start on Sundays.");
     }
-}
 
-
-
-    
-
-
+    // ------------------
+    // Time validation
+    // ------------------
     if ($start_time && !preg_match("/^\d{2}:\d{2}$/", $start_time)) {
         throw new Exception("Invalid start_time format. Expected HH:MM.");
     }
@@ -103,8 +97,6 @@ if ($plan_type === 'monthly') {
         throw new Exception("Invalid end_time format. Expected HH:MM.");
     }
 
-
-    // Append :00 to times if needed
     if ($start_time && strlen($start_time) === 5) $start_time .= ':00';
     if ($end_time && strlen($end_time) === 5) $end_time .= ':00';
 
@@ -129,70 +121,92 @@ if ($plan_type === 'monthly') {
     $stmt->close();
 
     // ------------------
-// FIXED BOOKING OVERLAP LOGIC
-// ------------------
-if ($plan_type === 'hourly') {
-    // Hourly → cannot overlap other hourly AND cannot be inside daily/monthly booking
-    $stmt = $conn->prepare("
-        SELECT 1 FROM workspace_bookings
-        WHERE space_id = ?
-          AND (
-                (plan_type = 'hourly' AND start_date = ? AND start_time < ? AND end_time > ?)
-                OR
-                (plan_type = 'daily' AND start_date = ?)
-                OR
-                (plan_type = 'monthly' AND ? BETWEEN start_date AND end_date)
-              )
-        LIMIT 1
-    ");
-    $stmt->bind_param("isssss", $space_id, $start_date, $end_time, $start_time, $start_date, $start_date);
+    // Booking Overlap Logic (Detailed version)
+    // ------------------
+    if ($plan_type === 'hourly') {
+        $stmt = $conn->prepare("
+            SELECT plan_type, start_date, end_date, start_time, end_time
+            FROM workspace_bookings
+            WHERE space_id = ?
+              AND (
+                    (plan_type = 'hourly' AND start_date = ? AND start_time < ? AND end_time > ?)
+                 OR (plan_type = 'daily' AND start_date = ?)
+                 OR (plan_type = 'monthly' AND ? BETWEEN start_date AND end_date)
+                  )
+            LIMIT 1
+        ");
+        $stmt->bind_param("isssss", $space_id, $start_date, $end_time, $start_time, $start_date, $start_date);
 
-} elseif ($plan_type === 'daily') {
-    // Daily → cannot overlap daily/hourly on same day AND cannot fall inside monthly
-    $stmt = $conn->prepare("
-        SELECT 1 FROM workspace_bookings
-        WHERE space_id = ?
-          AND (
-                (plan_type = 'daily' AND start_date = ?)
-                OR
-                (plan_type = 'hourly' AND start_date = ?)
-                OR
-                (plan_type = 'monthly' AND ? BETWEEN start_date AND end_date)
-              )
-        LIMIT 1
-    ");
-    $stmt->bind_param("isss", $space_id, $start_date, $start_date, $start_date);
+    } elseif ($plan_type === 'daily') {
+        $stmt = $conn->prepare("
+            SELECT plan_type, start_date, end_date, start_time, end_time
+            FROM workspace_bookings
+            WHERE space_id = ?
+              AND (
+                    (plan_type = 'daily' AND start_date = ?)
+                 OR (plan_type = 'hourly' AND start_date = ?)
+                 OR (plan_type = 'monthly' AND ? BETWEEN start_date AND end_date)
+                  )
+            LIMIT 1
+        ");
+        $stmt->bind_param("isss", $space_id, $start_date, $start_date, $start_date);
 
-} elseif ($plan_type === 'monthly') {
-    // Monthly → cannot overlap any bookings inside range
-    $stmt = $conn->prepare("
-        SELECT 1 FROM workspace_bookings
-        WHERE space_id = ?
-          AND (
-                (plan_type = 'monthly' AND start_date <= ? AND end_date >= ?)
-                OR
-                (plan_type = 'daily' AND start_date BETWEEN ? AND ?)
-                OR
-                (plan_type = 'hourly' AND start_date BETWEEN ? AND ?)
-              )
-        LIMIT 1
-    ");
-    $stmt->bind_param(
-        "issssss",
-        $space_id,
-        $end_date,
-        $start_date,
-        $start_date,
-        $end_date,
-        $start_date,
-        $end_date
-    );
-}
-
+    } elseif ($plan_type === 'monthly') {
+        $stmt = $conn->prepare("
+            SELECT plan_type, start_date, end_date, start_time, end_time
+            FROM workspace_bookings
+            WHERE space_id = ?
+              AND (
+                    (plan_type = 'monthly' AND start_date <= ? AND end_date >= ?)
+                 OR (plan_type = 'daily' AND start_date BETWEEN ? AND ?)
+                 OR (plan_type = 'hourly' AND start_date BETWEEN ? AND ?)
+                  )
+            LIMIT 1
+        ");
+        $stmt->bind_param(
+            "issssss",
+            $space_id,
+            $end_date,
+            $start_date,
+            $start_date,
+            $end_date,
+            $start_date,
+            $end_date
+        );
+    }
 
     $stmt->execute();
-    $stmt->store_result();
-    if ($stmt->num_rows > 0) throw new Exception("This workspace is already booked for the selected date/time range.");
+    $result = $stmt->get_result();
+
+    if ($result && $result->num_rows > 0) {
+        $conflict = $result->fetch_assoc();
+
+        $conflictPlan = ucfirst($conflict['plan_type'] ?? $plan_type);
+        $conflictStartDate = $conflict['start_date'] ?? $start_date;
+        $conflictEndDate = $conflict['end_date'] ?? $end_date;
+        $conflictStartTime = $conflict['start_time'] ?? '';
+        $conflictEndTime = $conflict['end_time'] ?? '';
+
+        $formattedStartDate = date("M d, Y", strtotime($conflictStartDate));
+        $formattedEndDate   = date("M d, Y", strtotime($conflictEndDate));
+        $friendlyMessage = "";
+
+        if ($conflictPlan === 'Hourly' && $conflictStartTime && $conflictEndTime) {
+            $formattedStartTime = date("h:i A", strtotime($conflictStartTime));
+            $formattedEndTime   = date("h:i A", strtotime($conflictEndTime));
+            $friendlyMessage = "This workspace is booked from $formattedStartTime to $formattedEndTime on $formattedStartDate.";
+        } elseif ($conflictPlan === 'Daily') {
+            $friendlyMessage = "This workspace is already booked for $formattedStartDate.";
+        } elseif ($conflictPlan === 'Monthly') {
+            $friendlyMessage = "This workspace is unavailable until $formattedEndDate (monthly plan).";
+        } else {
+            $friendlyMessage = "This workspace is already booked for the selected date/time.";
+        }
+
+        $stmt->close();
+        throw new Exception($friendlyMessage);
+    }
+
     $stmt->close();
 
     // ------------------
