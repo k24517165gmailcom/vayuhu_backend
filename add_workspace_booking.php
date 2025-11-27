@@ -2,9 +2,6 @@
 ini_set('display_errors', 1);
 error_reporting(E_ALL);
 
-// ------------------
-// CORS HEADERS
-// ------------------
 header("Access-Control-Allow-Origin: http://localhost:5173");
 header("Access-Control-Allow-Methods: POST, OPTIONS");
 header("Access-Control-Allow-Credentials: true");
@@ -19,19 +16,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 try {
     include 'db.php';
 
-    // ------------------
-    // Read JSON Input
-    // ------------------
-    $raw = file_get_contents("php://input");
-    $data = json_decode($raw, true);
+    $data = json_decode(file_get_contents("php://input"), true);
+    if (json_last_error() !== JSON_ERROR_NONE) throw new Exception("Invalid JSON payload.");
 
-    if (json_last_error() !== JSON_ERROR_NONE) {
-        throw new Exception("Invalid JSON payload.");
-    }
-
-    // ------------------
-    // Extract and sanitize fields
-    // ------------------
+    // --- Extract and validate input ---
     $user_id         = (int)($data['user_id'] ?? 0);
     $space_id        = (int)($data['space_id'] ?? 0);
     $workspace_title = trim($data['workspace_title'] ?? '');
@@ -52,240 +40,111 @@ try {
     $referral_source = trim($data['referral_source'] ?? '');
     $terms_accepted  = (int)($data['terms_accepted'] ?? 0);
 
-    // ------------------
-    // Basic Validation
-    // ------------------
-    if ($user_id <= 0) throw new Exception("Missing or invalid user_id.");
-    if ($space_id <= 0) throw new Exception("Missing or invalid space_id.");
-    if (!$workspace_title || !$plan_type || !$start_date || !$end_date) {
+    if ($user_id <= 0 || $space_id <= 0 || !$workspace_title || !$plan_type || !$start_date || !$end_date) {
         throw new Exception("Missing required fields.");
     }
-
     if (!in_array($plan_type, ['hourly', 'daily', 'monthly'])) {
         throw new Exception("Invalid plan_type. Must be 'hourly', 'daily', or 'monthly'.");
     }
+    if ($terms_accepted !== 1) throw new Exception("Terms must be accepted.");
 
-    if (!preg_match("/^\d{4}-\d{2}-\d{2}$/", $start_date)) {
-        throw new Exception("Invalid start_date format. Expected YYYY-MM-DD.");
+    // --- Validate dates and times ---
+    if (!preg_match("/^\d{4}-\d{2}-\d{2}$/", $start_date) || !preg_match("/^\d{4}-\d{2}-\d{2}$/", $end_date)) {
+        throw new Exception("Invalid date format. Expected YYYY-MM-DD.");
     }
-    if (!preg_match("/^\d{4}-\d{2}-\d{2}$/", $end_date)) {
-        throw new Exception("Invalid end_date format. Expected YYYY-MM-DD.");
+    if (($plan_type === 'hourly' || $plan_type === 'daily') && (date('w', strtotime($start_date)) == 0 || date('w', strtotime($end_date)) == 0)) {
+        throw new Exception("Bookings cannot be made on Sundays.");
     }
-
-    // ------------------
-    // Block Sundays
-    // ------------------
-    $start_ts = strtotime($start_date);
-    $end_ts   = strtotime($end_date);
-
-    if ($plan_type === 'hourly' || $plan_type === 'daily') {
-        if (date('w', $start_ts) == 0 || date('w', $end_ts) == 0) {
-            throw new Exception("Bookings cannot be made on Sundays.");
-        }
-    }
-    if ($plan_type === 'monthly' && date('w', $start_ts) == 0) {
+    if ($plan_type === 'monthly' && date('w', strtotime($start_date)) == 0) {
         throw new Exception("Monthly bookings cannot start on Sundays.");
     }
-
-    // ------------------
-    // Time validation
-    // ------------------
-    if ($start_time && !preg_match("/^\d{2}:\d{2}$/", $start_time)) {
-        throw new Exception("Invalid start_time format. Expected HH:MM.");
-    }
-    if ($end_time && !preg_match("/^\d{2}:\d{2}$/", $end_time)) {
-        throw new Exception("Invalid end_time format. Expected HH:MM.");
-    }
-
+    if ($start_time && !preg_match("/^\d{2}:\d{2}$/", $start_time)) throw new Exception("Invalid start_time format. Expected HH:MM.");
+    if ($end_time && !preg_match("/^\d{2}:\d{2}$/", $end_time)) throw new Exception("Invalid end_time format. Expected HH:MM.");
     if ($start_time && strlen($start_time) === 5) $start_time .= ':00';
     if ($end_time && strlen($end_time) === 5) $end_time .= ':00';
 
-    // ------------------
-    // Validate user exists
-    // ------------------
+    // --- Validate user and space exist ---
     $stmt = $conn->prepare("SELECT 1 FROM users WHERE id = ? LIMIT 1");
     $stmt->bind_param("i", $user_id);
-    $stmt->execute();
-    $stmt->store_result();
+    $stmt->execute(); $stmt->store_result();
     if ($stmt->num_rows === 0) throw new Exception("Invalid user_id: user not found.");
     $stmt->close();
 
-    // ------------------
-    // Validate space exists
-    // ------------------
     $stmt = $conn->prepare("SELECT 1 FROM spaces WHERE id = ? LIMIT 1");
     $stmt->bind_param("i", $space_id);
-    $stmt->execute();
-    $stmt->store_result();
+    $stmt->execute(); $stmt->store_result();
     if ($stmt->num_rows === 0) throw new Exception("Invalid space_id: space not found.");
     $stmt->close();
 
-    // ------------------
-    // Booking Overlap Logic (Detailed version)
-    // ------------------
-    if ($plan_type === 'hourly') {
-        $stmt = $conn->prepare("
-            SELECT plan_type, start_date, end_date, start_time, end_time
-            FROM workspace_bookings
-            WHERE space_id = ?
-              AND (
-                    (plan_type = 'hourly' AND start_date = ? AND start_time < ? AND end_time > ?)
-                 OR (plan_type = 'daily' AND start_date = ?)
-                 OR (plan_type = 'monthly' AND ? BETWEEN start_date AND end_date)
-                  )
-            LIMIT 1
-        ");
-        $stmt->bind_param("isssss", $space_id, $start_date, $end_time, $start_time, $start_date, $start_date);
-
-    } elseif ($plan_type === 'daily') {
-        $stmt = $conn->prepare("
-            SELECT plan_type, start_date, end_date, start_time, end_time
-            FROM workspace_bookings
-            WHERE space_id = ?
-              AND (
-                    (plan_type = 'daily' AND start_date = ?)
-                 OR (plan_type = 'hourly' AND start_date = ?)
-                 OR (plan_type = 'monthly' AND ? BETWEEN start_date AND end_date)
-                  )
-            LIMIT 1
-        ");
-        $stmt->bind_param("isss", $space_id, $start_date, $start_date, $start_date);
-
-    } elseif ($plan_type === 'monthly') {
-        $stmt = $conn->prepare("
-            SELECT plan_type, start_date, end_date, start_time, end_time
-            FROM workspace_bookings
-            WHERE space_id = ?
-              AND (
-                    (plan_type = 'monthly' AND start_date <= ? AND end_date >= ?)
-                 OR (plan_type = 'daily' AND start_date BETWEEN ? AND ?)
-                 OR (plan_type = 'hourly' AND start_date BETWEEN ? AND ?)
-                  )
-            LIMIT 1
-        ");
-        $stmt->bind_param(
-            "issssss",
-            $space_id,
-            $end_date,
-            $start_date,
-            $start_date,
-            $end_date,
-            $start_date,
-            $end_date
-        );
-    }
-
+    // --- Check for booking conflicts (hourly/daily/monthly) ---
+    $stmt = $conn->prepare("
+        SELECT plan_type, start_date, end_date, start_time, end_time
+        FROM workspace_bookings
+        WHERE space_id = ?
+          AND (
+                (plan_type = 'hourly' AND start_date = ? AND NOT (? <= start_time OR ? >= end_time))
+             OR (plan_type = 'daily' AND start_date = ?)
+             OR (plan_type = 'monthly' AND NOT (? < start_date OR ? > end_date))
+              )
+        LIMIT 1
+    ");
+    $stmt->bind_param("issssss", $space_id, $start_date, $end_time, $start_time, $start_date, $start_date, $end_date);
     $stmt->execute();
     $result = $stmt->get_result();
-
     if ($result && $result->num_rows > 0) {
         $conflict = $result->fetch_assoc();
-
-        $conflictPlan = ucfirst($conflict['plan_type'] ?? $plan_type);
-        $conflictStartDate = $conflict['start_date'] ?? $start_date;
-        $conflictEndDate = $conflict['end_date'] ?? $end_date;
-        $conflictStartTime = $conflict['start_time'] ?? '';
-        $conflictEndTime = $conflict['end_time'] ?? '';
-
-        $formattedStartDate = date("M d, Y", strtotime($conflictStartDate));
-        $formattedEndDate   = date("M d, Y", strtotime($conflictEndDate));
-        $friendlyMessage = "";
-
-        if ($conflictPlan === 'Hourly' && $conflictStartTime && $conflictEndTime) {
-            $formattedStartTime = date("h:i A", strtotime($conflictStartTime));
-            $formattedEndTime   = date("h:i A", strtotime($conflictEndTime));
-            $friendlyMessage = "This workspace is booked from $formattedStartTime to $formattedEndTime on $formattedStartDate.";
-        } elseif ($conflictPlan === 'Daily') {
-            $friendlyMessage = "This workspace is already booked for $formattedStartDate.";
-        } elseif ($conflictPlan === 'Monthly') {
-            $friendlyMessage = "This workspace is unavailable until $formattedEndDate (monthly plan).";
-        } else {
-            $friendlyMessage = "This workspace is already booked for the selected date/time.";
-        }
-
-        $stmt->close();
-        throw new Exception($friendlyMessage);
+        throw new Exception("This workspace is already booked for the selected time/date.");
     }
-
     $stmt->close();
 
-    // ------------------
-    // Generate booking ID
-    // ------------------
+    // --- Generate booking ID ---
     $today = date("Ymd");
-    $query = "
-        SELECT booking_id 
-        FROM workspace_bookings 
-        WHERE booking_id LIKE 'BKG-$today-%'
-        ORDER BY booking_id DESC 
-        LIMIT 1
-    ";
+    $query = "SELECT booking_id FROM workspace_bookings WHERE booking_id LIKE 'BKG-$today-%' ORDER BY booking_id DESC LIMIT 1";
     $result = $conn->query($query);
-    if ($result && $row = $result->fetch_assoc()) {
-        $lastNum = (int)substr($row['booking_id'], -3);
-        $nextNum = str_pad($lastNum + 1, 3, '0', STR_PAD_LEFT);
-    } else {
-        $nextNum = "001";
-    }
+    $nextNum = ($result && $row = $result->fetch_assoc()) ? str_pad((int)substr($row['booking_id'], -3) + 1, 3, '0', STR_PAD_LEFT) : "001";
     $booking_id = "BKG-$today-$nextNum";
 
-    // ------------------
-    // Insert booking
-    // ------------------
+    // --- Insert booking as pending ---
+    $status = 'pending';
     $stmt = $conn->prepare("
         INSERT INTO workspace_bookings (
             booking_id, user_id, space_id, workspace_title, plan_type,
             start_date, end_date, start_time, end_time,
             total_days, total_hours, num_attendees,
             price_per_unit, base_amount, gst_amount, discount_amount, final_amount,
-            coupon_code, referral_source, terms_accepted
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            coupon_code, referral_source, terms_accepted, status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ");
-    if (!$stmt) throw new Exception("Prepare failed: " . $conn->error);
-
     $stmt->bind_param(
-        "siissssssiidddddssii",
-        $booking_id,
-        $user_id,
-        $space_id,
-        $workspace_title,
-        $plan_type,
-        $start_date,
-        $end_date,
-        $start_time,
-        $end_time,
-        $total_days,
-        $total_hours,
-        $num_attendees,
-        $price_per_unit,
-        $base_amount,
-        $gst_amount,
-        $discount_amount,
-        $final_amount,
-        $coupon_code,
-        $referral_source,
-        $terms_accepted
+        "siissssssiidddddssiss",
+        $booking_id, $user_id, $space_id, $workspace_title, $plan_type,
+        $start_date, $end_date, $start_time, $end_time,
+        $total_days, $total_hours, $num_attendees,
+        $price_per_unit, $base_amount, $gst_amount, $discount_amount, $final_amount,
+        $coupon_code, $referral_source, $terms_accepted, $status
     );
+    if (!$stmt->execute()) throw new Exception("Could not save booking. " . $stmt->error);
+    $stmt->close();
 
-    if (!$stmt->execute()) {
-        throw new Exception("Could not save booking. " . $stmt->error);
+    // --- Simulate payment processing ---
+    $payment_successful = true; // Replace with real payment gateway response
+    if ($payment_successful) {
+        $update = $conn->prepare("UPDATE workspace_bookings SET status = 'confirmed' WHERE booking_id = ?");
+        $update->bind_param("s", $booking_id);
+        $update->execute();
+        $update->close();
     }
+
+    $conn->close();
 
     echo json_encode([
         "success" => true,
         "message" => "Booking saved successfully.",
-        "booking_id" => $booking_id
+        "booking_id" => $booking_id,
+        "status" => $payment_successful ? 'confirmed' : 'pending'
     ]);
-
-    $stmt->close();
-    $conn->close();
 
 } catch (Exception $e) {
     http_response_code(400);
-    echo json_encode([
-        "success" => false,
-        "message" => $e->getMessage()
-    ]);
+    echo json_encode(["success" => false, "message" => $e->getMessage()]);
 }
-?>

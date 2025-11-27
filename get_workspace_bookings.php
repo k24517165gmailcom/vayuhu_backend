@@ -34,35 +34,34 @@ try {
 
     // Fetch bookings
     $stmt = $conn->prepare("
-    SELECT 
-        wb.booking_id,
-        wb.space_id,
-        s.space_code,
-        wb.workspace_title,
-        wb.plan_type,
-        wb.start_date,
-        wb.end_date,
-        wb.start_time,
-        wb.end_time,
-        wb.total_days,
-        wb.total_hours,
-        wb.num_attendees,
-        wb.price_per_unit,
-        wb.base_amount,
-        wb.gst_amount,
-        wb.discount_amount,
-        wb.final_amount,
-        wb.coupon_code,
-        wb.referral_source,
-        wb.terms_accepted,
-        wb.status,
-        wb.created_at
-    FROM workspace_bookings wb
-    JOIN spaces s ON wb.space_id = s.id
-    WHERE wb.user_id = ?
-    ORDER BY wb.created_at DESC
-");
-
+        SELECT 
+            wb.booking_id,
+            wb.space_id,
+            s.space_code,
+            wb.workspace_title,
+            wb.plan_type,
+            wb.start_date,
+            wb.end_date,
+            wb.start_time,
+            wb.end_time,
+            wb.total_days,
+            wb.total_hours,
+            wb.num_attendees,
+            wb.price_per_unit,
+            wb.base_amount,
+            wb.gst_amount,
+            wb.discount_amount,
+            wb.final_amount,
+            wb.coupon_code,
+            wb.referral_source,
+            wb.terms_accepted,
+            wb.status,
+            wb.created_at
+        FROM workspace_bookings wb
+        JOIN spaces s ON wb.space_id = s.id
+        WHERE wb.user_id = ?
+        ORDER BY wb.created_at DESC
+    ");
 
     if (!$stmt) {
         throw new Exception("Prepare failed.");
@@ -74,6 +73,18 @@ try {
 
     $bookings = [];
     while ($row = $result->fetch_assoc()) {
+        // Format start_time and end_time as HH:MM AM/PM
+        if (!empty($row['start_time'])) {
+            $row['start_time'] = date("h:i A", strtotime($row['start_time']));
+        }
+        if (!empty($row['end_time'])) {
+            $row['end_time'] = date("h:i A", strtotime($row['end_time']));
+        }
+
+        // Optionally format dates as well (e.g., Nov 27, 2025)
+        $row['start_date'] = date("M d, Y", strtotime($row['start_date']));
+        $row['end_date']   = date("M d, Y", strtotime($row['end_date']));
+
         $bookings[] = $row;
     }
 
