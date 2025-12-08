@@ -5,7 +5,7 @@
 $allowed_origin = "http://localhost:5173";
 header("Access-Control-Allow-Origin: $allowed_origin");
 header("Access-Control-Allow-Methods: POST, OPTIONS");
-header("Access-Control-Allow-Headers: Content-Type");
+header("Access-Control-Allow-Headers: Content-Type, Authorization"); // ✅ Added Authorization header
 header("Access-Control-Allow-Credentials: true");
 
 if ($_SERVER["REQUEST_METHOD"] === "OPTIONS") {
@@ -22,6 +22,34 @@ ini_set("display_errors", 0);
 error_reporting(E_ALL);
 
 // -------------------------
+// ✅ Include JWT Library
+// -------------------------
+require_once __DIR__ . '/vendor/autoload.php';
+use Firebase\JWT\JWT;
+use Firebase\JWT\Key;
+
+// ✅ Define the same secret key used in login/signup
+$secret_key = "VAYUHU_SECRET_KEY_CHANGE_THIS";
+
+// -------------------------
+// ✅ Verify JWT Token
+// -------------------------
+$headers = getallheaders();
+if (!isset($headers['Authorization'])) {
+    echo json_encode(["success" => false, "message" => "Missing Authorization token"]);
+    exit;
+}
+
+list(, $token) = explode(" ", $headers['Authorization']);
+try {
+    $decoded = JWT::decode($token, new Key($secret_key, 'HS256'));
+    $userData = (array)$decoded->data; // now you have user info here
+} catch (Exception $e) {
+    echo json_encode(["success" => false, "message" => "Invalid or expired token"]);
+    exit;
+}
+
+// -------------------------
 // Database
 // -------------------------
 require_once "db.php";
@@ -31,7 +59,7 @@ if (!$conn) {
 }
 
 // -------------------------
-// Upload Limits (important for JSON reliability)
+// Upload Limits
 // -------------------------
 ini_set("upload_max_filesize", "5M");
 ini_set("post_max_size", "10M");
@@ -69,7 +97,7 @@ $blog_heading = val("blog_heading");
 $blog_description = val("blog_description");
 
 // -------------------------
-// Duplicate Blog Heading Check (Optional)
+// Duplicate Blog Heading Check
 // -------------------------
 $chk = $conn->prepare("SELECT id FROM blogs WHERE blog_heading = ?");
 $chk->bind_param("s", $blog_heading);
@@ -86,7 +114,7 @@ if ($chk->num_rows > 0) {
 $chk->close();
 
 // -------------------------
-// Image Upload Validation (improved & robust)
+// Image Upload Validation
 // -------------------------
 if (!isset($_FILES["blog_image"]) || $_FILES["blog_image"]["error"] !== UPLOAD_ERR_OK) {
     echo json_encode(["success" => false, "message" => "Blog image is required or upload failed."]);
@@ -104,10 +132,9 @@ if ($fileSize > $maxBytes) {
     exit;
 }
 
-// Determine MIME type in a few ways for reliability
+// Determine MIME type
 $mime = null;
 
-// 1) Prefer the fileinfo extension
 if (function_exists('finfo_open')) {
     $finfo = finfo_open(FILEINFO_MIME_TYPE);
     if ($finfo) {
@@ -117,7 +144,6 @@ if (function_exists('finfo_open')) {
     }
 }
 
-// 2) Fallback to getimagesize for images
 if ($mime === null || $mime === false) {
     $gs = @getimagesize($fileTmp);
     if ($gs && isset($gs['mime'])) {
@@ -125,7 +151,6 @@ if ($mime === null || $mime === false) {
     }
 }
 
-// 3) Final fallback to provided client MIME (less trustworthy)
 if ($mime === null || $mime === false) {
     $mime = isset($_FILES["blog_image"]["type"]) ? $_FILES["blog_image"]["type"] : null;
 }
@@ -135,21 +160,18 @@ if (!$mime) {
     exit;
 }
 
-// Acceptable MIME types (include common variants)
 $allowed = [
     "image/jpeg", "image/pjpeg", "image/jpg",
     "image/png", "image/x-png",
     "image/webp",
     "image/gif",
-    "image/avif" // <-- added support for AVIF
+    "image/avif"
 ];
 
-
 if (!in_array(strtolower($mime), $allowed, true)) {
-    // helpful debug info (remove in production)
     echo json_encode([
         "success" => false,
-        "message" => "Invalid image format: detected('$mime'). Allowed: jpeg/png/webp/gif.",
+        "message" => "Invalid image format: detected('$mime'). Allowed: jpeg/png/webp/gif."
     ]);
     exit;
 }
@@ -189,12 +211,15 @@ $stmt->bind_param(
 );
 
 if ($stmt->execute()) {
-    echo json_encode(["success" => true, "message" => "Blog added successfully"]);
+    echo json_encode([
+        "success" => true,
+        "message" => "Blog added successfully",
+        "user" => $userData // ✅ optional: include who added the blog
+    ]);
 } else {
     echo json_encode(["success" => false, "message" => "DB Error: " . $stmt->error]);
 }
 
 $stmt->close();
 $conn->close();
-
 ?>

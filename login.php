@@ -17,6 +17,14 @@ header("Content-Type: application/json; charset=UTF-8");
 // --- Include Database ---
 require_once 'db.php';
 
+// ✅ NEW: Include JWT library
+require_once __DIR__ . '/vendor/autoload.php';
+use Firebase\JWT\JWT;
+use Firebase\JWT\Key;
+
+// ✅ NEW: Define secret key
+$secret_key = "VAYUHU_SECRET_KEY_CHANGE_THIS"; // change to a secure random string
+
 // --- Get JSON Input ---
 $input = json_decode(file_get_contents("php://input"), true);
 
@@ -62,10 +70,28 @@ if (!password_verify($password, $user["password"])) {
 // --- Login successful ---
 unset($user["password"]); // remove password from response
 
+// ✅ NEW: Create JWT payload
+$payload = [
+    "iss" => "http://localhost/vayuhu_backend",
+    "aud" => "http://localhost:5173",
+    "iat" => time(),
+    "exp" => time() + (60 * 60 * 24), // expires in 24 hours
+    "data" => [
+        "id" => $user["id"],
+        "name" => $user["name"],
+        "email" => $user["email"]
+    ]
+];
+
+// ✅ NEW: Generate JWT
+$jwt = JWT::encode($payload, $secret_key, 'HS256');
+
+// ✅ NEW: Return token with response
 echo json_encode([
     "status" => "success",
     "message" => "Login successful.",
-    "user" => $user
+    "user" => $user,
+    "token" => $jwt // send token to frontend
 ]);
 
 $stmt->close();

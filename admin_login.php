@@ -17,8 +17,18 @@ header("Content-Type: application/json; charset=UTF-8");
 // --- Include Database ---
 require_once 'db.php';
 
+// --- Include JWT library ---
+require_once __DIR__ . '/vendor/autoload.php';
+use Firebase\JWT\JWT;
+use Firebase\JWT\Key;
+
+// --- Secret Key ---
+$secret_key = "VAYUHU_SECRET_KEY_CHANGE_THIS";
+
 // --- Get JSON Input ---
 $input = json_decode(file_get_contents("php://input"), true);
+
+// --- Validate JSON ---
 if (!$input) {
     echo json_encode(["status" => "error", "message" => "Invalid JSON input."]);
     exit;
@@ -33,7 +43,7 @@ if (empty($email) || empty($password)) {
     exit;
 }
 
-// --- Fetch admin by email ---
+// --- Fetch Admin ---
 $sql = "SELECT id, name, email, password, role FROM admins WHERE email = ?";
 $stmt = $conn->prepare($sql);
 $stmt->bind_param("s", $email);
@@ -57,13 +67,32 @@ if (!password_verify($password, $admin["password"])) {
     exit;
 }
 
-// --- Login successful ---
-unset($admin["password"]); // remove password from response
+// --- Remove password ---
+unset($admin["password"]);
 
+// --- Create JWT Payload ---
+$payload = [
+    "iss" => "http://localhost/vayuhu_backend",
+    "aud" => "http://localhost:5173",
+    "iat" => time(),
+    "exp" => time() + (60 * 60 * 24), // 24 hours
+    "data" => [
+        "id" => $admin["id"],
+        "name" => $admin["name"],
+        "email" => $admin["email"],
+        "role" => $admin["role"]
+    ]
+];
+
+// --- Generate JWT ---
+$jwt = JWT::encode($payload, $secret_key, 'HS256');
+
+// --- Success Response ---
 echo json_encode([
     "status" => "success",
     "message" => "Admin login successful.",
-    "admin" => $admin
+    "admin" => $admin,
+    "token" => $jwt
 ]);
 
 $stmt->close();
