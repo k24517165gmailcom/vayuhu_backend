@@ -28,27 +28,24 @@ if (!$input) {
     exit;
 }
 
-// --- Extract booking data ---
-$user_id         = $input["user_id"] ?? null;
-$user_email      = trim($input["user_email"] ?? "");
-$workspace_title = trim($input["workspace_title"] ?? "");
-$plan_type       = trim($input["plan_type"] ?? "");
-$start_date      = trim($input["start_date"] ?? "");
-$end_date        = trim($input["end_date"] ?? "");
-$start_time      = trim($input["start_time"] ?? "");
-$end_time        = trim($input["end_time"] ?? "");
-$total_amount    = trim($input["total_amount"] ?? "");
-$coupon_code     = trim($input["coupon_code"] ?? "");
+// --- Extract user data ---
+$user_id    = $input["user_id"] ?? null;
+$user_email = trim($input["user_email"] ?? "");
+$total_amount = trim($input["total_amount"] ?? "");
+$coupon_code  = trim($input["coupon_code"] ?? "");
 $referral_source = trim($input["referral_source"] ?? "");
+$bookings = $input["bookings"] ?? []; // <-- array of bookings
 
 // --- Validation ---
-if (empty($user_email) || empty($workspace_title) || empty($plan_type)) {
-    echo json_encode(["success" => false, "message" => "Missing booking details."]);
+if (empty($user_email) || empty($bookings) || !is_array($bookings)) {
+    echo json_encode(["success" => false, "message" => "Missing user or booking details."]);
     exit;
 }
 
 // --- Compose Email Content ---
 $subject = "Your Booking Confirmation - Vayuhu Workspaces";
+
+// Start HTML body
 $body = "
 <html>
 <head><style>
@@ -61,17 +58,34 @@ body { font-family: Arial, sans-serif; color: #333; }
   <h2>Booking Confirmation</h2>
   <p>Dear Customer,</p>
   <p>Thank you for booking with <strong>Vayuhu Workspaces</strong>. Below are your booking details:</p>
-  <table class='table'>
-    <tr><th>Workspace</th><td>{$workspace_title}</td></tr>
-    <tr><th>Plan Type</th><td>{$plan_type}</td></tr>
-    <tr><th>Start Date</th><td>{$start_date}</td></tr>
-    <tr><th>End Date</th><td>{$end_date}</td></tr>
-    <tr><th>Start Time</th><td>{$start_time}</td></tr>
-    <tr><th>End Time</th><td>{$end_time}</td></tr>
-    <tr><th>Total Amount</th><td>₹{$total_amount}</td></tr>
-    " . (!empty($coupon_code) ? "<tr><th>Coupon Code</th><td>{$coupon_code}</td></tr>" : "") . "
-    " . (!empty($referral_source) ? "<tr><th>Referral Source</th><td>{$referral_source}</td></tr>" : "") . "
-  </table>
+";
+
+// --- Loop through all bookings ---
+foreach ($bookings as $booking) {
+    $workspace_title = $booking['workspace_title'] ?? '';
+    $plan_type       = $booking['plan_type'] ?? '';
+    $start_date      = $booking['start_date'] ?? '';
+    $end_date        = $booking['end_date'] ?? '';
+    $start_time      = $booking['start_time'] ?? '';
+    $end_time        = $booking['end_time'] ?? '';
+    $final_amount    = $booking['final_amount'] ?? '';
+
+    $body .= "
+    <table class='table'>
+      <tr><th>Workspace</th><td>{$workspace_title}</td></tr>
+      <tr><th>Plan Type</th><td>{$plan_type}</td></tr>
+      <tr><th>Start Date</th><td>{$start_date}</td></tr>
+      <tr><th>End Date</th><td>{$end_date}</td></tr>
+      <tr><th>Start Time</th><td>{$start_time}</td></tr>
+      <tr><th>End Time</th><td>{$end_time}</td></tr>
+      <tr><th>Total Amount</th><td>₹{$final_amount}</td></tr>
+      " . (!empty($coupon_code) ? "<tr><th>Coupon Code</th><td>{$coupon_code}</td></tr>" : "") . "
+      " . (!empty($referral_source) ? "<tr><th>Referral Source</th><td>{$referral_source}</td></tr>" : "") . "
+    </table><br/>";
+}
+
+// End HTML body
+$body .= "
   <p>We look forward to hosting you.</p>
   <p><strong>— Team Vayuhu</strong></p>
 </body>
