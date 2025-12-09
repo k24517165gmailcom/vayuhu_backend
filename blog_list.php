@@ -73,6 +73,23 @@ while ($row = $result->fetch_assoc()) {
 }
 
 // ------------------------------------
+// ✅ AUTO-ROTATE BLOG ORDER DAILY (ADDED)
+// ------------------------------------
+$totalBlogs = count($blogs);
+
+if ($totalBlogs > 0) {
+    // Use day of year (0–365) to determine how many positions to rotate
+    $dayOfYear = date('z'); 
+    $shift = $dayOfYear % $totalBlogs;
+
+    // Rotate the blogs array so that order changes daily
+    $blogs = array_merge(
+        array_slice($blogs, -$shift),
+        array_slice($blogs, 0, -$shift)
+    );
+}
+
+// ------------------------------------
 // RESPONSE
 // ------------------------------------
 echo json_encode([
