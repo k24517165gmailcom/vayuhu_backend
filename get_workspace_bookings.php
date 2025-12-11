@@ -33,11 +33,13 @@ try {
     }
 
     // Fetch bookings
+    // 🟢 UPDATED SELECT: Added `wb.seat_codes` to the list
     $stmt = $conn->prepare("
         SELECT 
             wb.booking_id,
             wb.space_id,
             s.space_code,
+            wb.seat_codes, 
             wb.workspace_title,
             wb.plan_type,
             wb.start_date,

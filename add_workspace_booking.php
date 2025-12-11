@@ -22,6 +22,12 @@ try {
     // --- Extract and validate input ---
     $user_id         = (int)($data['user_id'] ?? 0);
     $space_id        = (int)($data['space_id'] ?? 0);
+
+    // 🟢 NEW: Capture seat codes array or string. Frontend might send 'selected_codes' or 'seat_codes'
+    $seat_codes_raw  = $data['selected_codes'] ?? $data['seat_codes'] ?? '';
+    // Ensure it's a string. If array, join it.
+    $seat_codes      = is_array($seat_codes_raw) ? implode(", ", $seat_codes_raw) : trim($seat_codes_raw);
+
     $workspace_title = trim($data['workspace_title'] ?? '');
     $plan_type       = strtolower(trim($data['plan_type'] ?? ''));
     $start_date      = trim($data['start_date'] ?? '');
@@ -106,18 +112,22 @@ try {
 
     // --- Insert booking as pending ---
     $status = 'pending';
+    
+    // 🟢 UPDATED QUERY: Added `seat_codes` column
     $stmt = $conn->prepare("
         INSERT INTO workspace_bookings (
-            booking_id, user_id, space_id, workspace_title, plan_type,
+            booking_id, user_id, space_id, seat_codes, workspace_title, plan_type,
             start_date, end_date, start_time, end_time,
             total_days, total_hours, num_attendees,
             price_per_unit, base_amount, gst_amount, discount_amount, final_amount,
             coupon_code, referral_source, terms_accepted, status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ");
+    
+    // 🟢 UPDATED BIND: Added 's' to types string (4th char) and `$seat_codes` variable
     $stmt->bind_param(
-        "siissssssiidddddssiss",
-        $booking_id, $user_id, $space_id, $workspace_title, $plan_type,
+        "siisssssssiidddddssiss",
+        $booking_id, $user_id, $space_id, $seat_codes, $workspace_title, $plan_type,
         $start_date, $end_date, $start_time, $end_time,
         $total_days, $total_hours, $num_attendees,
         $price_per_unit, $base_amount, $gst_amount, $discount_amount, $final_amount,
@@ -148,3 +158,4 @@ try {
     http_response_code(400);
     echo json_encode(["success" => false, "message" => $e->getMessage()]);
 }
+?>

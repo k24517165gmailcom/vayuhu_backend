@@ -20,6 +20,7 @@ try {
     include "db.php";
 
     // Fetch all workspace bookings for admin view
+    // 🟢 UPDATED SQL: Added wb.seat_codes to the SELECT list
     $sql = "
     SELECT 
         wb.booking_id AS id,
@@ -27,6 +28,7 @@ try {
         u.phone AS mobile_no,
         wb.workspace_title AS space,
         s.space_code AS space_code,
+        wb.seat_codes AS seat_codes, 
         wb.plan_type AS pack,
         wb.start_date AS date,
         CONCAT(wb.start_time, ' - ', wb.end_time) AS timings,
