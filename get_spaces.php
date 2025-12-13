@@ -51,73 +51,81 @@ if ($result && $result->num_rows > 0) {
             : "";
 
         $spaceId = (int)$row["id"];
+        // 🟢 FIX: Get the current space code (e.g., 'WS44') to check inside seat_codes
+        $currentSpaceCode = $row["space_code"];
 
         // --------------------------------------
-// ✅ CHECK IF THIS SPACE IS BOOKED NOW OR FUTURE (hourly time-sensitive)
-// --------------------------------------
-$checkSql = "
-    SELECT 
-        start_date, 
-        end_date, 
-        start_time,
-        end_time,
-        plan_type 
-    FROM workspace_bookings 
-    WHERE space_id = ? 
-      AND status IN ('Confirmed', 'Pending')
-      AND (
-            (plan_type = 'hourly'  AND start_date = ?)
-         OR (plan_type = 'daily'   AND start_date >= ?)
-         OR (plan_type = 'monthly' AND end_date >= ?)
-          )
-    ORDER BY start_date ASC
-    LIMIT 1
-";
+        // ✅ CHECK IF THIS SPACE IS BOOKED NOW OR FUTURE (hourly time-sensitive)
+        // --------------------------------------
+        
+        // 🟢 UPDATE: Modified query to check if space_id matches OR if the code exists in seat_codes
+        $checkSql = "
+            SELECT 
+                start_date, 
+                end_date, 
+                start_time,
+                end_time,
+                plan_type 
+            FROM workspace_bookings 
+            WHERE (space_id = ? OR seat_codes LIKE ?)
+              AND status IN ('Confirmed', 'Pending')
+              AND (
+                    (plan_type = 'hourly'  AND start_date = ?)
+                 OR (plan_type = 'daily'   AND start_date >= ?)
+                 OR (plan_type = 'monthly' AND end_date >= ?)
+                  )
+            ORDER BY start_date ASC
+            LIMIT 1
+        ";
 
-$stmt = $conn->prepare($checkSql);
-if ($stmt) {
-    $stmt->bind_param("isss", $spaceId, $today, $today, $today);
-    $stmt->execute();
-    $res2 = $stmt->get_result();
-} else {
-    $res2 = false;
-}
+        // 🟢 FIX: Create search pattern (e.g., %WS44%)
+        $codeSearch = "%" . $currentSpaceCode . "%";
 
-$bookedRow = null;
-$isAvailable = true;
+        $stmt = $conn->prepare($checkSql);
+        if ($stmt) {
+            // 🟢 FIX: Added 's' to types (issss) and bound $codeSearch
+            $stmt->bind_param("issss", $spaceId, $codeSearch, $today, $today, $today);
+            $stmt->execute();
+            $res2 = $stmt->get_result();
+        } else {
+            $res2 = false;
+        }
 
-if ($res2 && $res2->num_rows > 0) {
-    $bookedRow = $res2->fetch_assoc();
+        $bookedRow = null;
+        $isAvailable = true;
 
-    // ✅ If hourly booking, check current time
-    if ($bookedRow["plan_type"] === "hourly") {
-        $now = new DateTime("now");
-        $bookingDate = new DateTime($bookedRow["start_date"]);
-        $startTime = DateTime::createFromFormat("H:i", $bookedRow["start_time"]);
-        $endTime   = DateTime::createFromFormat("H:i", $bookedRow["end_time"]);
+        if ($res2 && $res2->num_rows > 0) {
+            $bookedRow = $res2->fetch_assoc();
 
-        if ($bookingDate->format("Y-m-d") === $now->format("Y-m-d")) {
-            // Merge date + time to full DateTime objects
-            $bookingStart = new DateTime($bookedRow["start_date"] . " " . $bookedRow["start_time"]);
-            $bookingEnd   = new DateTime($bookedRow["start_date"] . " " . $bookedRow["end_time"]);
+            // ✅ If hourly booking, check current time
+            if ($bookedRow["plan_type"] === "hourly") {
+                $now = new DateTime("now");
+                $bookingDate = new DateTime($bookedRow["start_date"]);
+                $startTime = DateTime::createFromFormat("H:i", $bookedRow["start_time"]);
+                $endTime   = DateTime::createFromFormat("H:i", $bookedRow["end_time"]);
 
-            if ($now >= $bookingStart && $now <= $bookingEnd) {
-                // Still within booked time → mark unavailable
-                $isAvailable = false;
+                if ($bookingDate->format("Y-m-d") === $now->format("Y-m-d")) {
+                    // Merge date + time to full DateTime objects
+                    $bookingStart = new DateTime($bookedRow["start_date"] . " " . $bookedRow["start_time"]);
+                    $bookingEnd   = new DateTime($bookedRow["start_date"] . " " . $bookedRow["end_time"]);
+
+                    if ($now >= $bookingStart && $now <= $bookingEnd) {
+                        // Still within booked time → mark unavailable
+                        $isAvailable = false;
+                    }
+                } elseif ($bookingDate > $now) {
+                    // Future hourly booking → still block it
+                    $isAvailable = false;
+                }
+            } else {
+                // Daily or Monthly → block as before
+                $isAvailable = true; // default
+                $endDate = new DateTime($bookedRow["end_date"]);
+                if ($endDate >= new DateTime($today)) {
+                    $isAvailable = false;
+                }
             }
-        } elseif ($bookingDate > $now) {
-            // Future hourly booking → still block it
-            $isAvailable = false;
         }
-    } else {
-        // Daily or Monthly → block as before
-        $isAvailable = true; // default
-        $endDate = new DateTime($bookedRow["end_date"]);
-        if ($endDate >= new DateTime($today)) {
-            $isAvailable = false;
-        }
-    }
-}
 
         // --------------------------------------
         // Mark is_available and attach reason
